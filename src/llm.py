@@ -6,22 +6,52 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+
+def extract_text_content(response: Any) -> str:
+    """Extract plain text string from LLM response whether it is a string,
+    AIMessage, or list of content blocks."""
+    if hasattr(response, "content"):
+        content = response.content
+    else:
+        content = response
+
+    if isinstance(content, str):
+        return content
+    elif isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and "text" in block:
+                parts.append(block["text"])
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts)
+    return str(content)
+
+
 def get_llm(model: Optional[str] = None, temperature: float = 0.2):
     """Returns a ChatGoogleGenerativeAI instance if GEMINI_API_KEY is available,
-    otherwise returns a MockShoppingLLM for deterministic offline execution."""
+    with multi-model fallback, otherwise returns MockShoppingLLM for deterministic offline tests."""
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    model_name = model or os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
+    preferred_model = model or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
     if api_key and not api_key.startswith("your_"):
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            return ChatGoogleGenerativeAI(
-                model=model_name,
-                google_api_key=api_key,
-                temperature=temperature,
-            )
-        except Exception as e:
-            print(f"[Warning] Failed to initialize ChatGoogleGenerativeAI: {e}. Falling back to MockShoppingLLM.")
+        candidate_models = [preferred_model]
+        for fallback in ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]:
+            if fallback not in candidate_models:
+                candidate_models.append(fallback)
+
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        for m in candidate_models:
+            try:
+                llm = ChatGoogleGenerativeAI(
+                    model=m,
+                    google_api_key=api_key,
+                    temperature=temperature,
+                )
+                return llm
+            except Exception as e:
+                print(f"[Warning] Failed to initialize ChatGoogleGenerativeAI with model {m}: {e}")
+                continue
 
     return MockShoppingLLM()
 
@@ -46,14 +76,12 @@ class MockShoppingLLM:
 
             def invoke(self, prompt: Any):
                 raw = self.parent.invoke(prompt).content
-                # Parse JSON if enclosed in markdown
                 match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
                 json_str = match.group(1) if match else raw
                 try:
                     data = json.loads(json_str)
                     return self.schema(**data)
                 except Exception:
-                    # Fallback default construction
                     return self.parent._generate_structured_fallback(self.schema, str(prompt))
 
         return StructuredMock(self, schema)
@@ -61,11 +89,9 @@ class MockShoppingLLM:
     def _generate_response(self, prompt_text: str) -> str:
         prompt_lower = prompt_text.lower()
         if "requirement" in prompt_lower or "extract" in prompt_lower:
-            # Isolate the user query to avoid matching words from the system instructions
             query_match = re.search(r"user query:\s*(.*)", prompt_text, re.IGNORECASE)
             query_text = query_match.group(1).lower() if query_match else prompt_lower
 
-            # Check category from the user query
             if any(k in query_text for k in ["laptop", "notebook", "ultrabook", "macbook"]):
                 category = "laptop"
             elif any(k in query_text for k in ["phone", "smartphone", "mobile"]):
@@ -76,8 +102,7 @@ class MockShoppingLLM:
                 category = "laptop"
 
             budget = 100000.0
-            # Detect numbers like 120k, 120000, 40k in user query
-            k_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:k|thousand)", query_text)
+            k_match = re.search(r"(\d+(?:\d+)?)\s*(?:k|thousand)", query_text)
             num_match = re.search(r"(\d{4,7})", query_text)
             if k_match:
                 budget = float(k_match.group(1)) * 1000
@@ -98,7 +123,6 @@ class MockShoppingLLM:
             if not purposes:
                 purposes.append("general daily use")
 
-            # Language detection
             has_bangla_script = bool(re.search(r"[\u0980-\u09FF]", query_text))
             has_banglish_words = bool(re.search(r"\b(amar|amake|lagbe|bhalo|koto|dam)\b", query_text))
             if has_bangla_script:
@@ -121,7 +145,6 @@ class MockShoppingLLM:
                 "detected_language": detected_lang
             })
 
-        # Recommendation / trade-off prompt
         return json.dumps({
             "summary": "Compared candidate options from top Bangladesh retailers.",
             "winner": "Lenovo LOQ 15" if "laptop" in prompt_lower else "Samsung Galaxy A55",
@@ -131,4 +154,3 @@ class MockShoppingLLM:
     def _generate_structured_fallback(self, schema: Any, prompt_text: str):
         data = json.loads(self._generate_response(prompt_text))
         return schema(**data)
-

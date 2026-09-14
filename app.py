@@ -13,7 +13,7 @@ from src.ui_helpers import (
 load_dotenv(override=True)
 
 st.set_page_config(
-    page_title="Bangladesh AI Shopping Decision Agent",
+    page_title="AI Shopping Decision & Comparison Agent",
     page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -34,18 +34,18 @@ if "current_query" not in st.session_state:
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/shopping-bag.png", width=64)
     st.title("🛒 Shopping Agent")
-    st.caption("AI Decision Intelligence for Bangladesh Tech Retail")
+    st.caption("Live 10-Product Search, Element Analysis & Recommendations")
 
     st.markdown("---")
-    st.subheader("⚙️ Configuration")
-    active_model = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
-    st.info(f"**Engine:** `{active_model}`\n\n**Search:** DuckDuckGo + Jina Reader")
+    st.subheader("⚙️ System Status")
+    active_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    st.info(f"**LLM Engine:** `{active_model}`\n\n**Search:** Live Store Catalog + DuckDuckGo\n\n**Coverage:** 10 Products Analyzed")
 
     st.markdown("### 🏬 Target Retailers")
-    startech = st.checkbox("Star Tech", value=True)
-    ryans = st.checkbox("Ryans Computers", value=True)
-    daraz = st.checkbox("Daraz BD", value=True)
-    pickaboo = st.checkbox("Pickaboo", value=True)
+    st.checkbox("Star Tech (Live Catalog)", value=True, disabled=True)
+    st.checkbox("Ryans Computers", value=True, disabled=True)
+    st.checkbox("Daraz Bangladesh", value=True, disabled=True)
+    st.checkbox("Pickaboo", value=True, disabled=True)
 
     st.markdown("---")
     st.subheader("🕒 Search History")
@@ -59,60 +59,59 @@ with st.sidebar:
 
 
 # Main Header
-st.title("🇧🇩 Bangladesh AI Shopping Decision Agent")
+st.title("🛒 Live AI Shopping Decision & Comparison Agent")
 st.markdown(
-    "Don't just search links—**compare trade-offs**, understand **value ratings**, "
-    "and get expert advice on **official warranties** before you spend your money."
+    "Search **10 live products**, extract **real-time page elements & specifications**, "
+    "and get an instant **side-by-side comparison matrix** with expert buying recommendations."
 )
 
 # Quick Suggestion Chips
 st.markdown("##### ⚡ Quick Scenarios")
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    if st.button("💻 Gaming Laptop (< 120k BDT)", use_container_width=True):
-        st.session_state.current_query = "I need a gaming laptop for AI and gaming under 120000 BDT in Bangladesh"
+    if st.button("💻 Laptop (< 100k BDT)", use_container_width=True):
+        st.session_state.current_query = "laptop under 100000 BDT in Bangladesh"
         st.rerun()
 with col2:
-    if st.button("📱 Camera Phone (< 45k BDT)", use_container_width=True):
-        st.session_state.current_query = "Suggest best smartphone under 45k taka with great camera and battery"
+    if st.button("⌨️ Mechanical Keyboard (< 5k)", use_container_width=True):
+        st.session_state.current_query = "mechanical keyboard under 5000 tk Star Tech"
         st.rerun()
 with col3:
-    if st.button("🖥️ Coding Monitor (< 20k BDT)", use_container_width=True):
-        st.session_state.current_query = "Find best IPS monitor under 20000 BDT for programming in Dhaka"
+    if st.button("📱 Camera Phone (< 45k)", use_container_width=True):
+        st.session_state.current_query = "smartphone under 45k taka with great camera and battery"
         st.rerun()
 with col4:
-    if st.button("🇧🇩 amar 35k e phone lagbe", use_container_width=True):
-        st.session_state.current_query = "amar 35k er moddhe bhalo camera ebong battery phone lagbe"
+    if st.button("🎮 Gaming Laptop (RTX)", use_container_width=True):
+        st.session_state.current_query = "gaming laptop under 120k with dedicated GPU"
         st.rerun()
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Search Input Bar
+# Search Input Form
 with st.form("search_form", clear_on_submit=False):
     query_input = st.text_input(
-        "What are you looking to buy?",
+        "What product are you looking to buy?",
         value=st.session_state.current_query,
-        placeholder="e.g. RTX 4060 laptop under 130k taka, or 'amar 40k er moddhe bhalo camera phone lagbe'",
-        help="Type in English, Bangla, or Banglish with your budget and priorities."
+        placeholder="e.g. laptop under 100000 BDT, mechanical keyboard under 5000 tk, or 'smartphone under 35k'",
+        help="Type in English, Bangla, or Banglish with your target product and budget."
     )
-    submit_button = st.form_submit_button("🔍 Research & Compare Products", type="primary", use_container_width=True)
+    submit_button = st.form_submit_button("🔍 Search 10 Products, Analyze & Compare", type="primary", use_container_width=True)
 
-# Execution logic
+# Execution Logic
 if submit_button and query_input.strip():
     query = query_input.strip()
     st.session_state.current_query = query
     if query not in st.session_state.history:
         st.session_state.history.append(query)
 
-    with st.status("🤖 Agent is researching products across Bangladesh stores...", expanded=True) as status:
-        st.write("🧠 **1. Requirement Analyzer:** Extracting category, budget, and priorities with Gemini...")
-        # Run graph
+    with st.status("🤖 Executing 4-Step Decision Pipeline...", expanded=True) as status:
+        st.write("🧠 **Step 1: Requirement Analysis** — Understanding category, budget & feature priorities...")
         result: ShoppingAgentState = run_shopping_agent(query)
 
-        st.write(f"🔎 **2. Search Coordinator:** Searched Bangladesh retailers (Star Tech, Ryans, Daraz, etc.)")
-        st.write(f"📄 **3. Product Extractor:** Analyzed candidate pages and normalized BDT specifications")
-        st.write(f"⚖️ **4. Recommendation Agent:** Ranked products and calculated value trade-offs")
-        status.update(label="✅ Research and Comparison Complete!", state="complete", expanded=False)
+        st.write("🔎 **Step 2: Live Search (10+ Products)** — Discovered candidate links across live Bangladesh stores...")
+        st.write("📄 **Step 3: Page Element Extraction** — Extracted title, price, specs, image & store details...")
+        st.write("⚖️ **Step 4: Gemini Comparative Analysis** — Calculated value ratings and side-by-side trade-offs...")
+        status.update(label="✅ 10 Products Researched, Analyzed & Compared!", state="complete", expanded=False)
 
     st.session_state.last_result = result
 
@@ -122,6 +121,7 @@ if st.session_state.last_result:
     res = st.session_state.last_result
     req: UserRequirement = res.get("requirements")
     recommendations = res.get("recommendations", [])
+    extracted_products = res.get("extracted_products", [])
 
     st.markdown("---")
 
@@ -131,8 +131,8 @@ if st.session_state.last_result:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Target Category", req.category.capitalize())
         m2.metric("Max Budget", f"{req.budget_max:,.0f} BDT" if req.budget_max else "Flexible")
-        m3.metric("Primary Usage", ", ".join(req.usage_purposes).title())
-        m4.metric("Language Detected", req.detected_language.upper())
+        m3.metric("Primary Usage", ", ".join(req.usage_purposes).title() if req.usage_purposes else "General")
+        m4.metric("Products Analyzed", f"{len(recommendations)} Items")
 
     # Top Pick Hero Section
     if recommendations:
@@ -140,111 +140,123 @@ if st.session_state.last_result:
         p_win = winner.product
 
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown(f"""
+        img_col, details_col = st.columns([1, 3]) if p_win.image_url else (None, None)
+
+        hero_html = f"""
         <div class="hero-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                <span style="font-size: 1.25rem; font-weight: 700; color: #047857;">🏆 TOP RECOMMENDATION</span>
+                <span style="font-size: 1.25rem; font-weight: 800; color: #047857;">🏆 TOP RECOMMENDATION (RANK #1)</span>
                 {get_store_badge_html(p_win.store)}
             </div>
             <h2 style="margin: 0.25rem 0 0.75rem 0; font-weight: 700;">
-                <a href="{p_win.url}" target="_blank" style="text-decoration: none; color: #111827;">{p_win.name}</a>
+                <a href="{p_win.url}" target="_blank" style="text-decoration: none; color: #0f172a;">{p_win.name}</a>
             </h2>
             <div style="display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1rem;">
                 <span class="price-tag">{format_bdt_price(p_win.price)}</span>
-                <span style="background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 8px; font-weight: 600; font-size: 0.9rem;">
-                    Score: {winner.score} / 10
-                </span>
-                <span style="color: #4b5563; font-size: 0.9rem;">Warranty: {p_win.warranty or 'Standard Retail'}</span>
+                <span class="score-badge">Value Score: {winner.score} / 10</span>
+                <span style="color: #64748b; font-size: 0.9rem;">Warranty: {p_win.warranty or 'Standard Retail'}</span>
             </div>
-            <p style="color: #374151; font-size: 0.95rem; margin-bottom: 0.75rem;">
-                <strong>Why it wins:</strong> {winner.why_buy[0] if winner.why_buy else 'Best overall value for your requirements.'}
+            <p style="color: #334155; font-size: 1rem; margin-bottom: 0.5rem;">
+                <strong>Why it wins:</strong> {winner.why_buy[0] if winner.why_buy else 'Delivers superior value for money and verified specs.'}
             </p>
         </div>
-        """, unsafe_allow_html=True)
+        """
 
-        st.link_button(f"🛒 View {p_win.name[:35]}... on {p_win.store}", p_win.url, type="primary")
+        if img_col and details_col:
+            with img_col:
+                st.image(p_win.image_url, width="stretch")
+            with details_col:
+                st.markdown(hero_html, unsafe_allow_html=True)
+                st.link_button(f"🛒 Buy / View on {p_win.store}", p_win.url, type="primary")
+        else:
+            st.markdown(hero_html, unsafe_allow_html=True)
+            st.link_button(f"🛒 Buy / View on {p_win.store}", p_win.url, type="primary")
 
         # Tabs for Deep Dive
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "🛍️ Curated Products", 
-            "📊 Side-by-Side Comparison", 
-            "🛡️ BD Buying Advice", 
-            "🔍 Agent Logs & Links"
+        tab_compare, tab_cards, tab_advice, tab_logs = st.tabs([
+            "📊 Side-by-Side Comparison (10 Products)",
+            "🛍️ All Ranked Product Cards",
+            "🛡️ BD Buying Advice",
+            "🔍 Agent Logs & Raw Elements"
         ])
 
-        # TAB 1: PRODUCT CARDS
-        with tab1:
-            st.markdown("### All Ranked Recommendations")
-            cols = st.columns(min(len(recommendations), 3))
+        # TAB 1: SIDE-BY-SIDE COMPARISON TABLE
+        with tab_compare:
+            st.markdown(f"### 📊 Side-by-Side Comparison Matrix ({len(recommendations)} Products)")
+            st.caption("Compare prices, specifications, value scores, advantages, and trade-offs at a glance.")
+            df_compare = build_comparison_dataframe(recommendations)
+            st.dataframe(df_compare, use_container_width=True, hide_index=True)
+
+        # TAB 2: PRODUCT CARDS
+        with tab_cards:
+            st.markdown(f"### 🛍️ Detailed Product Breakdown ({len(recommendations)} Items)")
+            cols = st.columns(3)
             for idx, card in enumerate(recommendations):
-                col = cols[idx % len(cols)]
+                col = cols[idx % 3]
                 p = card.product
                 with col:
                     with st.container(border=True):
                         st.markdown(f"**#{card.rank} {card.verdict}**")
                         st.markdown(get_store_badge_html(p.store), unsafe_allow_html=True)
+
+                        if p.image_url:
+                            st.image(p.image_url, width="stretch")
+
                         st.subheader(p.name)
                         st.markdown(f"<span class='price-tag'>{format_bdt_price(p.price)}</span>", unsafe_allow_html=True)
                         st.caption(f"⭐ Rating: {card.score}/10 | Warranty: {p.warranty or 'Standard'}")
 
                         if p.specs:
-                            st.markdown("**Specs:**")
-                            for k, v in p.specs.items():
-                                st.markdown(f"- **{k}:** `{v}`")
+                            st.markdown("**Key Elements & Specs:**")
+                            for k, v in list(p.specs.items())[:5]:
+                                st.markdown(f"<span class='spec-chip'><strong>{k}:</strong> {v}</span>", unsafe_allow_html=True)
 
-                        st.markdown("**Why Buy:**")
-                        for r in card.why_buy:
+                        st.markdown("<br>**Why to Buy:**", unsafe_allow_html=True)
+                        for r in card.why_buy[:2]:
                             st.markdown(f"✅ <span style='font-size:0.85rem;'>{r}</span>", unsafe_allow_html=True)
 
                         st.markdown("**Why NOT to Buy:**")
-                        for r in card.why_not_buy:
+                        for r in card.why_not_buy[:2]:
                             st.markdown(f"⚠️ <span style='font-size:0.85rem; color:#b45309;'>{r}</span>", unsafe_allow_html=True)
 
                         st.caption(f"💡 {card.bangladesh_note}")
                         st.link_button(f"Open in {p.store}", p.url, use_container_width=True)
 
-        # TAB 2: SIDE-BY-SIDE COMPARISON
-        with tab2:
-            st.markdown("### Side-by-Side Feature Matrix")
-            df_compare = build_comparison_dataframe(recommendations)
-            st.dataframe(df_compare, use_container_width=True, hide_index=True)
-
         # TAB 3: BANGLADESH BUYING ADVICE
-        with tab3:
-            st.markdown("### 💡 Bangladesh Buyer Guidance & Retailer Checklist")
+        with tab_advice:
+            st.markdown("### 💡 Bangladesh Tech Buying Advice & Checklist")
             st.info("""
-            **1. Official vs. Unofficial Warranty Check:**
-            - Always ask the retailer whether the listed price is for **Official Distributor Warranty** (e.g. Star Tech / Ryans official brand import) or **Seller Shop Warranty**.
-            - Unofficial units are often ৳5,000 - ৳25,000 cheaper but may not cover screen replacement or motherboard repairs.
-            
-            **2. Branch Stock Verification:**
-            - Central Dhaka warehouses often have stock that individual branch outlets (e.g. Uttara, Chattogram, Rajshahi) have not yet received.
+            **1. Official Distributor vs. Gray Market Warranty:**
+            - Always verify whether the listed price includes **Official Brand Warranty** (e.g., Star Tech / Ryans official import) or an unofficial shop warranty.
+            - Unofficial units might save ৳3,000 - ৳20,000 upfront, but lack official replacement parts or warranty service centers.
+
+            **2. Outlet Stock Verification:**
+            - Central warehouses (e.g. IDB Bhaban, Multiplan Center, Elephant Road) often have products that local branches (Uttara, Chattogram, Sylhet) have not received yet.
             - Call the specific outlet before visiting to confirm on-shelf readiness.
-            
+
             **3. Cash Discount vs. EMI:**
-            - Most Bangladeshi tech stores offer a 2% - 5% discount for direct cash/bKash payment compared to card EMI.
+            - Retailers in Bangladesh commonly offer a 2% to 5% instant discount for direct Cash or bKash payment compared to card EMI payment.
             """)
 
-        # TAB 4: TRANSPARENCY & AGENT LOGS
-        with tab4:
-            st.markdown("### 🔍 Execution Trace & Discovered URLs")
+        # TAB 4: TRANSPARENCY & RAW LOGS
+        with tab_logs:
+            st.markdown("### 🔍 Execution Trace & Extracted Elements")
             queries_run = res.get("search_queries", [])
             if queries_run:
-                st.markdown("**Search Queries Executed:**")
+                st.markdown("**Queries Executed:**")
                 for q in queries_run:
                     st.code(q, language="text")
 
             candidate_urls = res.get("candidate_urls", [])
             if candidate_urls:
-                st.markdown("**Discovered URLs:**")
+                st.markdown(f"**Discovered Candidate URLs ({len(candidate_urls)}):**")
                 for c in candidate_urls:
                     st.markdown(f"- [{c.get('title')}]({c.get('url')}) `({c.get('store')})`")
 
             logs = res.get("logs", [])
             if logs:
-                st.markdown("**LangGraph Execution Logs:**")
+                st.markdown("**Pipeline Logs:**")
                 for l in logs:
                     st.caption(f"• {l}")
     else:
-        st.warning("No candidate products matched your exact search criteria. Please try relaxing the budget or broadening the keywords.")
-
+        st.warning("No candidate products matched your search. Please try broadening your search query.")
