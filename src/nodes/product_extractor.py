@@ -6,35 +6,45 @@ from bs4 import BeautifulSoup
 from src.models import ShoppingAgentState, ProductSpec
 from src.tools.search import identify_store
 
+NON_PRICE_UNITS = r"(?:rpm|mah|dpi|hz|mhz|ghz|watt|watts|w|k|mb|gb|tb|kb|v|volt|volts|amp|amps|hour|hours|hr|hrs|kg|g|gm|gms|mm|cm|inch|inches|fps|cd/m2|nit|nits|pixels|px|core|cores|threads)"
+
 
 def extract_price_from_text(text: str) -> Optional[float]:
-    """Extract price in BDT from text using pattern matching."""
+    """Extract price in BDT from text using strict pattern matching.
+    Guarantees non-price specs (RPM: 18000, 5000 mAh, Out Of Stock) are NEVER decoded as prices."""
     if not text:
         return None
 
-    # Matches patterns like '115,000 ৳', 'Tk 45,000', '45,999 BDT', 'Price: 112,000', '2,400৳'
-    patterns = [
-        r"(?:tk|bdt|price|৳)\s*[:.-]?\s*([\d,]{3,8})",
-        r"([\d,]{3,8})\s*(?:tk|bdt|৳|taka)",
-        r"(?:regular price|special price|cash discount price|price)\s*[:.-]?\s*([\d,]{3,8})",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            clean_num = m.group(1).replace(",", "").strip()
-            try:
-                val = float(clean_num)
-                if 200 <= val <= 3000000:
-                    return val
-            except ValueError:
-                continue
+    # Disregard text that explicitly signals out of stock or TBA
+    if re.search(r"\b(?:out of stock|to be announced|tba|upcoming|discontinued|call for price)\b", text, re.IGNORECASE):
+        return None
 
-    # Standalone number fallback if preceded by currency context
-    num_match = re.search(r"([\d,]{4,7})", text)
-    if num_match:
+    # Pattern 1: Digits followed by currency symbol/code (e.g. '115,000৳', '45,000 BDT', '2,400 Tk', '45000 taka')
+    m1 = re.search(r"([\d,]{3,8}(?:\.\d{1,2})?)\s*(?:৳|tk\.?|bdt|taka)(?!\s*" + NON_PRICE_UNITS + r"\b)", text, re.IGNORECASE)
+    if m1:
         try:
-            val = float(num_match.group(1).replace(",", ""))
-            if 500 <= val <= 2500000:
+            val = float(m1.group(1).replace(",", ""))
+            if 100 <= val <= 5000000:
+                return val
+        except ValueError:
+            pass
+
+    # Pattern 2: Currency symbol/code followed by digits (e.g. '৳ 115,000', 'Tk 45,000', 'BDT 46,999')
+    m2 = re.search(r"(?:৳|tk\.?|bdt)\s*[:.-]?\s*([\d,]{3,8}(?:\.\d{1,2})?)(?!\s*" + NON_PRICE_UNITS + r"\b)", text, re.IGNORECASE)
+    if m2:
+        try:
+            val = float(m2.group(1).replace(",", ""))
+            if 100 <= val <= 5000000:
+                return val
+        except ValueError:
+            pass
+
+    # Pattern 3: Explicit price label like 'Price: 45,000' or 'Special Cash Price: 112,000' (NOT followed by technical units)
+    m3 = re.search(r"\b(?:regular price|special price|cash discount price|cash price|price)\s*[:.-]?\s*([\d,]{3,8}(?:\.\d{1,2})?)(?!\s*" + NON_PRICE_UNITS + r"\b)", text, re.IGNORECASE)
+    if m3:
+        try:
+            val = float(m3.group(1).replace(",", ""))
+            if 100 <= val <= 5000000:
                 return val
         except ValueError:
             pass
@@ -93,6 +103,15 @@ def extract_specs_from_text(text: str) -> Dict[str, str]:
     if conn_match:
         specs["Connectivity"] = conn_match.group(0).strip()
 
+    # Appliance / General specs (e.g. Wattage, RPM)
+    power_match = re.search(r"(\d+\s*(?:Watt|W)\b)", text, re.IGNORECASE)
+    if power_match:
+        specs["Power"] = power_match.group(0).strip()
+
+    rpm_match = re.search(r"(\d+\s*RPM\b)", text, re.IGNORECASE)
+    if rpm_match:
+        specs["Speed"] = rpm_match.group(0).strip()
+
     return specs
 
 
@@ -131,7 +150,10 @@ def parse_page_to_product(url: str, title: str, snippet: str, raw_markdown: Opti
     store = identify_store(url)
     clean_title = clean_product_title(title)
 
-    price = extract_price_from_text(combined_text)
+    # If snippet or title explicitly says out of stock or to be announced, price is None
+    is_out_of_stock = bool(re.search(r"\b(?:out of stock|to be announced|tba|upcoming|discontinued)\b", snippet, re.IGNORECASE))
+    price = None if is_out_of_stock else extract_price_from_text(combined_text)
+
     specs = extract_specs_from_text(combined_text)
     warranty = detect_warranty(combined_text)
 
@@ -140,7 +162,8 @@ def parse_page_to_product(url: str, title: str, snippet: str, raw_markdown: Opti
     common_brands = [
         "Lenovo", "Asus", "HP", "Dell", "Acer", "Apple", "Samsung", "Xiaomi", "Redmi",
         "Nothing", "Motorola", "Realme", "OnePlus", "MSI", "Gigabyte", "Sony", "Logitech",
-        "Fantech", "Dareu", "Magegee", "Royal Kludge", "Monka", "Jedel", "Xtreme", "Walton"
+        "Fantech", "Dareu", "Magegee", "Royal Kludge", "Monka", "Jedel", "Xtreme", "Walton",
+        "Singer", "Havells", "Panasonic", "Miyako", "Vision"
     ]
     for b in common_brands:
         if re.search(rf"\b{re.escape(b)}\b", clean_title, re.IGNORECASE):
@@ -162,7 +185,7 @@ def parse_page_to_product(url: str, title: str, snippet: str, raw_markdown: Opti
 
 
 def extract_elements_from_live_page(url: str, timeout: float = 3.5) -> Dict[str, Any]:
-    """Fetch live web page and extract structured elements (Title, Price, Specs, Image, Warranty)."""
+    """Fetch live web page and extract structured elements (Title, Price, Specs, Image, Warranty, Stock)."""
     elements = {"specs": {}}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -180,20 +203,32 @@ def extract_elements_from_live_page(url: str, timeout: float = 3.5) -> Dict[str,
                 if h1 and h1.get_text(strip=True):
                     elements["name"] = clean_product_title(h1.get_text(strip=True))
 
-                # 2. Price
-                price_tag = (
-                    soup.find(class_="product-price") or
-                    soup.find(class_="price") or
-                    soup.find(class_="p-price") or
-                    soup.find(class_="ins") or
-                    soup.find(attrs={"itemprop": "price"})
-                )
-                if price_tag:
-                    p_val = extract_price_from_text(price_tag.get_text(strip=True))
-                    if p_val:
-                        elements["price"] = p_val
+                # 2. Stock status check
+                stock_tag = soup.find(class_="stock-status") or soup.find(class_="stock")
+                stock_text = stock_tag.get_text(strip=True) if stock_tag else ""
+                is_out_of_stock = bool(re.search(r"\b(?:out of stock|to be announced|tba|upcoming|discontinued)\b", stock_text, re.IGNORECASE))
+                elements["is_out_of_stock"] = is_out_of_stock
 
-                # 3. Image URL
+                # 3. Price
+                if not is_out_of_stock:
+                    # Look for specialized price tags (ins for discount price, .product-price, etc.)
+                    price_tag = (
+                        soup.find("ins") or
+                        soup.find(class_="price-new") or
+                        soup.find(class_="product-price") or
+                        soup.find(class_="p-price") or
+                        soup.find(class_="price") or
+                        soup.find(attrs={"itemprop": "price"})
+                    )
+                    if price_tag:
+                        p_text = price_tag.get_text(strip=True)
+                        p_val = extract_price_from_text(p_text)
+                        if p_val:
+                            elements["price"] = p_val
+                else:
+                    elements["price"] = None
+
+                # 4. Image URL
                 og_img = soup.find("meta", property="og:image")
                 if og_img and og_img.get("content"):
                     elements["image_url"] = og_img["content"]
@@ -202,7 +237,7 @@ def extract_elements_from_live_page(url: str, timeout: float = 3.5) -> Dict[str,
                     if main_img and main_img.get("src"):
                         elements["image_url"] = main_img["src"]
 
-                # 4. Specifications table
+                # 5. Specifications table
                 specs_dict = {}
                 for tr in soup.select(".data-table tr, table.specification tr"):
                     cols = tr.find_all(["td", "th"])
@@ -225,7 +260,7 @@ def extract_elements_from_live_page(url: str, timeout: float = 3.5) -> Dict[str,
                 if specs_dict:
                     elements["specs"] = specs_dict
 
-                # 5. Warranty
+                # 6. Warranty
                 warranty_elem = soup.find(string=re.compile(r"warranty", re.IGNORECASE))
                 if warranty_elem:
                     elements["warranty"] = detect_warranty(str(warranty_elem))
@@ -242,7 +277,6 @@ def product_extractor_node(state: ShoppingAgentState) -> ShoppingAgentState:
     extracted: List[ProductSpec] = []
     seen_names = set()
 
-    # Target up to 10 products
     for item in candidates[:14]:
         if len(extracted) >= 10:
             break
@@ -259,7 +293,12 @@ def product_extractor_node(state: ShoppingAgentState) -> ShoppingAgentState:
 
         if pre_image:
             product.image_url = pre_image
-        if pre_price_text and not product.price:
+
+        # If candidate already has verified price text from catalog
+        is_pre_out_of_stock = bool(re.search(r"\b(?:out of stock|to be announced|tba|upcoming|discontinued)\b", pre_price_text, re.IGNORECASE))
+        if is_pre_out_of_stock:
+            product.price = None
+        elif pre_price_text and not product.price:
             product.price = extract_price_from_text(pre_price_text)
 
         if pre_specs_list:
@@ -270,13 +309,18 @@ def product_extractor_node(state: ShoppingAgentState) -> ShoppingAgentState:
                 elif s:
                     product.specs[f"Highlight {len(product.specs)+1}"] = s
 
-        # For the top 5 candidates with live pages, fetch live elements for deeper specs
+        # For the top 5 candidates with live pages, fetch live elements for deeper specs and verified price
         if len(extracted) < 5 and url.startswith("http"):
             live_elements = extract_elements_from_live_page(url, timeout=3.0)
             if live_elements.get("name"):
                 product.name = live_elements["name"]
-            if live_elements.get("price"):
+
+            # If page indicates out of stock, explicitly clear price
+            if live_elements.get("is_out_of_stock"):
+                product.price = None
+            elif live_elements.get("price"):
                 product.price = live_elements["price"]
+
             if live_elements.get("image_url") and not product.image_url:
                 product.image_url = live_elements["image_url"]
             if live_elements.get("specs"):

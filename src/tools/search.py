@@ -89,7 +89,10 @@ def search_startech_catalog(query: str, max_results: int = 10) -> List[Dict[str,
                     # Short specs
                     specs_list = [li.get_text(strip=True) for li in it.select(".short-description li")]
                     snippet = " | ".join(specs_list)
-                    if price_text:
+                    is_out_of_stock = bool(re.search(r"\b(?:out of stock|to be announced|tba|upcoming|discontinued)\b", price_text, re.IGNORECASE))
+                    if is_out_of_stock:
+                        snippet = f"Stock: Out of Stock. {snippet}"
+                    elif price_text:
                         snippet = f"Price: {price_text}. {snippet}"
 
                     results.append({
@@ -98,7 +101,8 @@ def search_startech_catalog(query: str, max_results: int = 10) -> List[Dict[str,
                         "snippet": snippet,
                         "store": "Star Tech",
                         "image_url": img_url,
-                        "price_text": price_text,
+                        "price_text": "" if is_out_of_stock else price_text,
+                        "in_stock": not is_out_of_stock,
                         "specs_list": specs_list,
                     })
     except Exception:

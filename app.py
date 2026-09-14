@@ -27,8 +27,10 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "last_result" not in st.session_state:
     st.session_state.last_result = None
-if "current_query" not in st.session_state:
-    st.session_state.current_query = ""
+if "search_query" not in st.session_state:
+    st.session_state.search_query = ""
+if "trigger_search" not in st.session_state:
+    st.session_state.trigger_search = False
 
 # Sidebar
 with st.sidebar:
@@ -52,7 +54,8 @@ with st.sidebar:
     if st.session_state.history:
         for idx, prev_q in enumerate(reversed(st.session_state.history[-5:])):
             if st.button(f"🔍 {prev_q[:28]}...", key=f"hist_{idx}"):
-                st.session_state.current_query = prev_q
+                st.session_state.search_query = prev_q
+                st.session_state.trigger_search = True
                 st.rerun()
     else:
         st.caption("No previous searches yet.")
@@ -70,19 +73,23 @@ st.markdown("##### ⚡ Quick Scenarios")
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     if st.button("💻 Laptop (< 100k BDT)", use_container_width=True):
-        st.session_state.current_query = "laptop under 100000 BDT in Bangladesh"
+        st.session_state.search_query = "laptop under 100000 BDT in Bangladesh"
+        st.session_state.trigger_search = True
         st.rerun()
 with col2:
     if st.button("⌨️ Mechanical Keyboard (< 5k)", use_container_width=True):
-        st.session_state.current_query = "mechanical keyboard under 5000 tk Star Tech"
+        st.session_state.search_query = "mechanical keyboard under 5000 tk Star Tech"
+        st.session_state.trigger_search = True
         st.rerun()
 with col3:
     if st.button("📱 Camera Phone (< 45k)", use_container_width=True):
-        st.session_state.current_query = "smartphone under 45k taka with great camera and battery"
+        st.session_state.search_query = "smartphone under 45k taka with great camera and battery"
+        st.session_state.trigger_search = True
         st.rerun()
 with col4:
     if st.button("🎮 Gaming Laptop (RTX)", use_container_width=True):
-        st.session_state.current_query = "gaming laptop under 120k with dedicated GPU"
+        st.session_state.search_query = "gaming laptop under 120k with dedicated GPU"
+        st.session_state.trigger_search = True
         st.rerun()
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -91,16 +98,17 @@ st.markdown("<br>", unsafe_allow_html=True)
 with st.form("search_form", clear_on_submit=False):
     query_input = st.text_input(
         "What product are you looking to buy?",
-        value=st.session_state.current_query,
+        key="search_query",
         placeholder="e.g. laptop under 100000 BDT, mechanical keyboard under 5000 tk, or 'smartphone under 35k'",
         help="Type in English, Bangla, or Banglish with your target product and budget."
     )
     submit_button = st.form_submit_button("🔍 Search 10 Products, Analyze & Compare", type="primary", use_container_width=True)
 
 # Execution Logic
-if submit_button and query_input.strip():
-    query = query_input.strip()
-    st.session_state.current_query = query
+should_search = (submit_button and query_input.strip()) or (st.session_state.trigger_search and st.session_state.search_query.strip())
+if should_search:
+    st.session_state.trigger_search = False
+    query = st.session_state.search_query.strip()
     if query not in st.session_state.history:
         st.session_state.history.append(query)
 

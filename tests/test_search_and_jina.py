@@ -20,6 +20,16 @@ def test_extract_bdt_prices():
     text2 = "Samsung Galaxy A55 price in Bangladesh is 46,999 BDT."
     assert extract_price_from_text(text2) == 46999.0
 
+    # Non-price specifications must NEVER decode as prices
+    assert extract_price_from_text("RPM: 18000 Approx at No Load") is None
+    assert extract_price_from_text("5000 mAh Battery") is None
+    assert extract_price_from_text("Intel Core i5-14400 14th Gen Desktop PC") is None
+
+    # Out of stock or TBA notices must return None
+    assert extract_price_from_text("Out Of Stock") is None
+    assert extract_price_from_text("To be announced") is None
+    assert extract_price_from_text("Price: Out Of Stock") is None
+
 
 def test_extract_specs():
     sample_text = "Lenovo LOQ 15 Gaming Laptop comes with Core i5-12450HX, 16GB DDR5 RAM, 512GB SSD, RTX 4060 8GB Graphics, 15.6 inch FHD 144Hz Display."
