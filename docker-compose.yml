@@ -1,8 +1,9 @@
-version: '3.8'
-
 services:
   shopping-agent:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
     container_name: shopping-agent-app
     restart: unless-stopped
     ports:
@@ -10,7 +11,13 @@ services:
     env_file:
       - .env
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health')"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
