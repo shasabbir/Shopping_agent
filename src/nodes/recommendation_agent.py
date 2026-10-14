@@ -5,13 +5,13 @@ from src.models import ShoppingAgentState, RecommendationCard, UserRequirement, 
 from src.llm import get_llm, extract_text_content
 
 
-ANALYSIS_SYSTEM_PROMPT = """You are an expert tech shopping advisor in Bangladesh.
-Your task is to analyze the following candidate products found in live stores for the user's shopping requirement.
+ANALYSIS_SYSTEM_PROMPT = """You are an expert consumer shopping advisor in Bangladesh.
+Your task is to analyze candidate products discovered across Bangladesh e-commerce stores for the user's shopping requirement.
 
 User Shopping Intent:
-- Category: {category}
+- Target Category / Item: {category}
 - Maximum Budget: {budget}
-- Purpose / Usage: {purposes}
+- User Priorities & Criteria: {purposes}
 - User Query: "{query}"
 
 Candidate Products ({count} products found):
@@ -20,7 +20,7 @@ Candidate Products ({count} products found):
 Provide your analysis in clean JSON format matching this schema:
 {{
   "winner_index": 0,
-  "summary": "2-3 sentence overview of the options and current market pricing",
+  "summary": "2-3 sentence overview of the options, availability, and market pricing in Bangladesh",
   "products": [
     {{
       "index": 0,
@@ -29,7 +29,7 @@ Provide your analysis in clean JSON format matching this schema:
       "why_buy": ["Primary strength 1", "Strength 2"],
       "why_not_buy": ["Key trade-off or drawback"],
       "who_should_buy": "Ideal buyer for this option",
-      "bangladesh_note": "Local retail tip regarding stock or warranty"
+      "buyer_advice": "Practical local buying guidance regarding store reputation, delivery, or warranty"
     }}
   ]
 }}
@@ -41,17 +41,19 @@ def format_products_for_llm(products: List[ProductSpec]) -> str:
     lines = []
     for i, p in enumerate(products):
         price_str = f"{p.price:,.0f} BDT" if p.price else "Price on inquiry"
-        specs_str = ", ".join(f"{k}: {v}" for k, v in list(p.specs.items())[:6]) or p.raw_snippet or "Standard Specs"
+        specs_str = ", ".join(f"{k}: {v}" for k, v in list(p.specs.items())[:6]) or p.raw_snippet or "Standard Attributes"
         lines.append(f"[{i}] {p.name} | Store: {p.store} | Price: {price_str} | Specs: {specs_str}")
     return "\n".join(lines)
 
 
 def heuristic_score_product(product: ProductSpec, req: UserRequirement, index: int) -> float:
-    """Calculate heuristic score from 5.0 to 9.8 based on specs and budget."""
-    score = 7.5 - (index * 0.2)
+    """Calculate category-agnostic heuristic score based on budget, criteria match, and stock."""
+    score = 7.5 - (index * 0.15)
     name_lower = product.name.lower()
     specs_str = " ".join(f"{k}: {v}" for k, v in product.specs.items()).lower()
+    combined_text = f"{name_lower} {specs_str} {product.raw_snippet or ''}".lower()
 
+    # Budget score adjustment
     if req.budget_max and product.price:
         if product.price <= req.budget_max:
             score += 0.8
@@ -59,16 +61,20 @@ def heuristic_score_product(product: ProductSpec, req: UserRequirement, index: i
             diff = (product.price - req.budget_max) / req.budget_max
             score -= min(2.5, diff * 4.0)
 
-    for p in req.usage_purposes:
-        p_lower = p.lower()
-        if "ai" in p_lower or "gaming" in p_lower:
-            if "rtx 4060" in specs_str or "rtx 4060" in name_lower:
-                score += 1.5
-            elif "rtx" in specs_str or "rtx" in name_lower:
-                score += 0.8
-        elif "camera" in p_lower:
-            if "ois" in specs_str or "50mp" in specs_str or "200mp" in specs_str:
-                score += 1.0
+    # In-stock bonus / penalty
+    if product.price is None:
+        score -= 1.0
+    elif product.in_stock is False:
+        score -= 1.5
+
+    # Match user criteria / purposes across attributes
+    matched_criteria = 0
+    criteria_list = (req.usage_purposes or []) + (req.must_have_specs or [])
+    for c in criteria_list:
+        c_words = [w for w in re.findall(r"\w+", c.lower()) if len(w) > 3]
+        if any(w in combined_text for w in c_words):
+            matched_criteria += 1
+            score += 0.4
 
     return round(min(9.8, max(5.0, score)), 1)
 
@@ -81,7 +87,7 @@ def heuristic_reasons(product: ProductSpec, req: UserRequirement) -> tuple[List[
         if product.price <= req.budget_max:
             why_buy.append(f"Comfortably within target budget (৳{product.price:,.0f} vs ৳{req.budget_max:,.0f})")
         else:
-            why_not.append(f"Slightly above target budget (৳{product.price:,.0f})")
+            why_not.append(f"Above target budget (৳{product.price:,.0f})")
 
     if product.specs:
         key_specs = list(product.specs.items())[:2]
@@ -92,15 +98,15 @@ def heuristic_reasons(product: ProductSpec, req: UserRequirement) -> tuple[List[
         why_buy.append("Competitive price and live availability in Bangladesh retail")
 
     if not why_not:
-        why_not.append("Regional outlet stock may vary between Dhaka and other branches")
+        why_not.append("Verify outlet stock or delivery timeline before ordering")
 
     return why_buy, why_not
 
 
 def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
-    """Analyze up to 10 extracted products using Gemini LLM, rank them, and generate comparison."""
+    """Analyze candidate products neutrally across any product category, rank them, and generate comparison."""
     products = state.get("extracted_products", [])
-    req = state.get("requirements") or UserRequirement(category="tech", usage_purposes=["general"])
+    req = state.get("requirements") or UserRequirement(category="consumer goods", usage_purposes=["general"])
     user_query = state.get("user_query", "")
 
     if not products:
@@ -117,7 +123,7 @@ def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
     prompt = ANALYSIS_SYSTEM_PROMPT.format(
         category=req.category,
         budget=f"{req.budget_max:,.0f} BDT" if req.budget_max else "Flexible",
-        purposes=", ".join(req.usage_purposes) if req.usage_purposes else "General tech purchase",
+        purposes=", ".join(req.usage_purposes) if req.usage_purposes else "General purchase",
         query=user_query,
         count=len(products),
         products_text=products_text,
@@ -140,7 +146,7 @@ def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
             if idx is not None and 0 <= idx < len(products):
                 llm_products_map[idx] = p_info
 
-    # Build recommendations for all 10 products
+    # Build recommendations for candidate products
     recommendation_cards: List[RecommendationCard] = []
     verdicts_default = [
         "🏆 Top Recommendation",
@@ -168,7 +174,7 @@ def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
             why_not = why_not or h_not
 
         who_should_buy = llm_info.get("who_should_buy") or f"Buyers seeking {req.category} at {prod.store}."
-        bd_note = llm_info.get("bangladesh_note") or f"Available via {prod.store}. Inquire about official distributor warranty."
+        advice = llm_info.get("buyer_advice") or llm_info.get("bangladesh_note") or f"Available via {prod.store}. Confirm warranty and delivery terms."
 
         card = RecommendationCard(
             rank=idx + 1,
@@ -178,7 +184,8 @@ def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
             why_buy=why_buy,
             why_not_buy=why_not,
             who_should_buy=who_should_buy,
-            bangladesh_note=bd_note
+            buyer_advice=advice,
+            bangladesh_note=advice
         )
         recommendation_cards.append(card)
 
@@ -191,13 +198,13 @@ def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
 
     # Build formatted markdown summary
     lines = [
-        f"# 🛒 Bangladesh Tech Shopping Analysis & Comparison ({len(recommendation_cards)} Products Analyzed)\n",
+        f"# 🛒 Bangladesh Shopping Analysis & Comparison ({len(recommendation_cards)} Products Analyzed)\n",
         f"**Target:** {req.category.capitalize()} | **Budget:** {f'{req.budget_max:,.0f} BDT' if req.budget_max else 'Flexible'} | **Priorities:** {', '.join(req.usage_purposes).title()}\n",
         f"### 🏆 Top Winner: [{top_pick.product.name}]({top_pick.product.url})",
         f"- **Store:** {top_pick.product.store} | **Price:** {f'৳{top_pick.product.price:,.0f}' if top_pick.product.price else 'Check Retail Link'}",
         f"- **Value Rating:** {top_pick.score} / 10",
-        f"- **Winning Advantage:** {top_pick.why_buy[0] if top_pick.why_buy else 'Best overall balance'}\n",
-        "### 📊 All 10 Candidate Products Ranked:"
+        f"- **Winning Advantage:** {top_pick.why_buy[0] if top_pick.why_buy else 'Best overall value'}\n",
+        "### 📊 Ranked Candidate Products:"
     ]
 
     for c in recommendation_cards:
@@ -213,11 +220,11 @@ def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
 
     lines.append("---")
     lines.append("### 💡 Bangladesh Buyer Guidance & Retailer Checklist:")
-    lines.append("1. **Official vs. Unofficial Warranty Check:** Always verify whether the listed price includes Official Distributor Warranty or Seller Shop Warranty.")
-    lines.append("2. **Outlet Stock Verification:** Call the branch before visiting to confirm on-shelf readiness.")
-    lines.append("3. **Payment Discounts:** Most Bangladesh tech stores offer a 2% - 5% discount for cash/bKash payment compared to EMI.")
+    lines.append("1. **Warranty & Authenticity:** Always verify whether the listing includes Official Brand Warranty or Seller/Shop Warranty.")
+    lines.append("2. **Outlet & Delivery Readiness:** Call or chat with the store to verify live stock before placing an order.")
+    lines.append("3. **Payment Discounts:** Look for instant discounts (2% to 10%) on direct bKash, Nagad, or credit card payment.")
 
-    summary_text = analysis_data.get("summary", "Analyzed and ranked the top 10 products from Bangladesh retailers.")
+    summary_text = analysis_data.get("summary", f"Analyzed and ranked the top products from Bangladesh online retailers.")
     final_answer = "\n".join(lines)
 
     logs = list(state.get("logs", []))

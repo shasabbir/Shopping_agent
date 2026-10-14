@@ -4,16 +4,16 @@ from pydantic import BaseModel, Field
 
 
 class UserRequirement(BaseModel):
-    """Parsed user shopping requirements."""
-    category: str = Field(description="Product category, e.g. laptop, smartphone, monitor")
+    """Parsed user shopping requirements across any product category."""
+    category: str = Field(description="Product category, e.g. footwear, kitchen appliances, cosmetics, furniture, tech, etc.")
     budget_max: Optional[float] = Field(default=None, description="Maximum budget in BDT")
     budget_min: Optional[float] = Field(default=None, description="Minimum budget in BDT if specified")
     currency: str = Field(default="BDT", description="Currency symbol/code")
     location: str = Field(default="Bangladesh", description="Target region/country")
-    usage_purposes: List[str] = Field(default_factory=list, description="Primary intended usage, e.g. gaming, coding, camera, battery")
+    usage_purposes: List[str] = Field(default_factory=list, description="Intended usage, preferences, or target application")
     priorities: List[str] = Field(default_factory=list, description="Feature priorities sorted by importance")
-    must_have_specs: List[str] = Field(default_factory=list, description="Specific must-have requirements, e.g. RTX 4060, 16GB RAM, OLED")
-    preferred_stores: List[str] = Field(default_factory=lambda: ["Star Tech", "Ryans", "Daraz"], description="Stores to search")
+    must_have_specs: List[str] = Field(default_factory=list, description="Specific must-have requirements, attributes, or features")
+    preferred_stores: List[str] = Field(default_factory=list, description="Stores to filter by (empty means open web across all stores)")
     detected_language: str = Field(default="en", description="Language detected: en, bn, or banglish")
 
 
@@ -23,7 +23,7 @@ class ProductSpec(BaseModel):
     brand: Optional[str] = None
     price: Optional[float] = None
     currency: str = "BDT"
-    store: str = "Unknown Store"
+    store: str = "Online Retailer"
     url: str
     image_url: Optional[str] = None
     specs: Dict[str, str] = Field(default_factory=dict)
@@ -31,6 +31,9 @@ class ProductSpec(BaseModel):
     cons: List[str] = Field(default_factory=list)
     warranty: Optional[str] = None
     is_official: Optional[bool] = None
+    in_stock: Optional[bool] = None
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
     raw_snippet: Optional[str] = None
 
 
@@ -43,6 +46,7 @@ class RecommendationCard(BaseModel):
     why_buy: List[str] = Field(default_factory=list)
     why_not_buy: List[str] = Field(default_factory=list)
     who_should_buy: str = ""
+    buyer_advice: Optional[str] = None
     bangladesh_note: Optional[str] = None
 
 

@@ -10,6 +10,10 @@ def test_identify_bangladesh_stores():
     assert identify_store("https://ryans.com/item/456") == "Ryans Computers"
     assert identify_store("https://www.daraz.com.bd/products/789") == "Daraz Bangladesh"
     assert identify_store("https://pickaboo.com/product/phone") == "Pickaboo"
+    assert identify_store("https://www.aarong.com/clothing/123") == "Aarong"
+    assert identify_store("https://apex4u.com/product/shoes") == "Apex Footwear"
+    # Dynamic domain inference without hardcoded entry
+    assert identify_store("https://custom-boutique.com/item/1") == "Custom Boutique"
 
 
 def test_extract_bdt_prices():
@@ -23,6 +27,7 @@ def test_extract_bdt_prices():
     # Non-price specifications must NEVER decode as prices
     assert extract_price_from_text("RPM: 18000 Approx at No Load") is None
     assert extract_price_from_text("5000 mAh Battery") is None
+    assert extract_price_from_text("Size: 42 EU Running Shoes") is None
     assert extract_price_from_text("Intel Core i5-14400 14th Gen Desktop PC") is None
 
     # Out of stock or TBA notices must return None
@@ -41,6 +46,11 @@ def test_extract_specs():
     assert "CPU" in specs
     assert "Storage" in specs
 
+    # Non-tech footwear & appliance specs
+    shoe_text = "Men's Sprint Running Shoes. Material: Breathable Mesh, Sole: EVA Rubber, Lace-Up Closure."
+    shoe_specs = extract_specs_from_text(shoe_text)
+    assert "Material" in shoe_specs or "Sole" in shoe_specs or "Closure" in shoe_specs
+
 
 def test_search_coordinator():
     state: ShoppingAgentState = {
@@ -49,12 +59,14 @@ def test_search_coordinator():
             category="laptop",
             budget_max=120000.0,
             usage_purposes=["gaming"],
-            location="Bangladesh"
+            location="Bangladesh",
+            preferred_stores=[]
         ),
         "logs": []
     }
     updated = search_coordinator_node(state)
     assert len(updated["search_queries"]) >= 2
     assert len(updated["candidate_urls"]) > 0
-    assert any("Star Tech" in r["store"] or "Ryans" in r["store"] for r in updated["candidate_urls"])
+    # Zero store bias: queries must not inject specific store names unless explicitly requested
+    assert all("Star Tech" not in q for q in updated["search_queries"])
 

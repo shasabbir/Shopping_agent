@@ -11,7 +11,7 @@ except ImportError:
     from duckduckgo_search import DDGS
 
 
-BD_STORE_MAP = {
+BD_KNOWN_STORE_MAP = {
     "startech.com.bd": "Star Tech",
     "ryans.com": "Ryans Computers",
     "ryanscomputers.com": "Ryans Computers",
@@ -23,96 +23,55 @@ BD_STORE_MAP = {
     "bdstall.com": "BDStall",
     "vibegaming.com.bd": "Vibe Gaming",
     "custommacbd.com": "Custom Mac BD",
+    "aarong.com": "Aarong",
+    "apex4u.com": "Apex Footwear",
+    "batabd.com": "Bata Bangladesh",
+    "lotto.com.bd": "Lotto Bangladesh",
+    "chaldal.com": "Chaldal",
+    "shwapno.com": "Shwapno",
+    "othoba.com": "Othoba",
+    "rokomari.com": "Rokomari",
+    "waltonbd.com": "Walton Plaza",
+    "singerbd.com": "Singer Bangladesh",
+    "transcomdigital.com": "Transcom Digital",
+    "skyland.com.bd": "Skyland BD",
+    "potakabd.com": "Potaka BD",
 }
 
 BLOCKED_DOMAINS = [
     "youtube.com", "facebook.com", "tiktok.com", "instagram.com",
     "pinterest.com", "reddit.com", "twitter.com", "x.com",
-    "bing.com", "google.com", "yahoo.com", "msn.com", "duckduckgo.com"
+    "bing.com", "google.com", "yahoo.com", "msn.com", "duckduckgo.com",
+    "wikipedia.org", "quora.com"
 ]
 
 
-def identify_store(url: str) -> str:
-    """Identify the store name from product URL."""
+def identify_store(url: str, site_name: Optional[str] = None) -> str:
+    """Dynamically identify store name from metadata or URL domain without retailer bias."""
+    if site_name and len(site_name.strip()) > 1:
+        return site_name.strip()
+
     try:
         domain = urlparse(url).netloc.lower()
         if domain.startswith("www."):
             domain = domain[4:]
-        for key, name in BD_STORE_MAP.items():
+
+        # Check known display names
+        for key, name in BD_KNOWN_STORE_MAP.items():
             if key in domain:
                 return name
-        return domain or "Online Retailer"
+
+        # Dynamically infer brand name from any domain
+        parts = domain.split(".")
+        base = parts[0] if parts[0] not in ["m", "shop", "store", "online", "app"] else (parts[1] if len(parts) > 1 else parts[0])
+        clean_name = base.replace("-", " ").replace("_", " ").title()
+        return clean_name or "Online Store"
     except Exception:
-        return "Online Retailer"
-
-
-def search_startech_catalog(query: str, max_results: int = 10) -> List[Dict[str, Any]]:
-    """Directly search Star Tech's live catalog for instant, verified products."""
-    results = []
-    # Clean budget phrases like 'under 100000', 'under 120k', etc. while preserving hardware model numbers like RTX 4060
-    clean_query = re.sub(r"\b(?:under|below|less than|budget of?|max)\s*[\d,]+(?:\s*k|\s*thousand)?(?:\s*(?:tk|bdt|taka))?\b", "", query, flags=re.IGNORECASE)
-    clean_query = re.sub(r"\b\d+(?:\.\d+)?\s*(?:k|thousand)\s*(?:tk|bdt|taka)?\b", "", clean_query, flags=re.IGNORECASE)
-    clean_query = re.sub(r"\b\d{5,7}\s*(?:tk|bdt|taka)?\b", "", clean_query, flags=re.IGNORECASE)
-    clean_query = re.sub(r"\b(?:in|bd|bangladesh|taka|bdt|tk)\b", "", clean_query, flags=re.IGNORECASE)
-    clean_query = re.sub(r"\s+", " ", clean_query).strip()
-    encoded = urllib.parse.quote_plus(clean_query or query)
-    url = f"https://www.startech.com.bd/product/search?search={encoded}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-
-    try:
-        with httpx.Client(timeout=8.0, follow_redirects=True) as client:
-            resp = client.get(url, headers=headers)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                items = soup.select(".p-item")
-                for it in items[:max_results]:
-                    name_tag = it.find(class_="p-item-name")
-                    if not name_tag:
-                        continue
-                    link_tag = name_tag.find("a")
-                    prod_url = link_tag["href"] if link_tag and link_tag.has_attr("href") else ""
-                    name = name_tag.get_text(strip=True)
-                    if not prod_url or not name:
-                        continue
-
-                    # Price
-                    price_tag = it.find(class_="p-item-price")
-                    price_text = price_tag.get_text(strip=True) if price_tag else ""
-
-                    # Image
-                    img_tag = it.find("img")
-                    img_url = img_tag["src"] if img_tag and img_tag.has_attr("src") else ""
-
-                    # Short specs
-                    specs_list = [li.get_text(strip=True) for li in it.select(".short-description li")]
-                    snippet = " | ".join(specs_list)
-                    is_out_of_stock = bool(re.search(r"\b(?:out of stock|to be announced|tba|upcoming|discontinued)\b", price_text, re.IGNORECASE))
-                    if is_out_of_stock:
-                        snippet = f"Stock: Out of Stock. {snippet}"
-                    elif price_text:
-                        snippet = f"Price: {price_text}. {snippet}"
-
-                    results.append({
-                        "url": prod_url,
-                        "title": name,
-                        "snippet": snippet,
-                        "store": "Star Tech",
-                        "image_url": img_url,
-                        "price_text": "" if is_out_of_stock else price_text,
-                        "in_stock": not is_out_of_stock,
-                        "specs_list": specs_list,
-                    })
-    except Exception:
-        pass
-
-    return results
+        return "Online Store"
 
 
 def search_duckduckgo(queries: List[str], max_results_per_query: int = 5) -> List[Dict[str, str]]:
-    """Search DuckDuckGo across multiple Bangladesh e-commerce stores."""
+    """Search DuckDuckGo across the entire open Bangladeshi web neutrally."""
     results: List[Dict[str, str]] = []
     seen = set()
 
@@ -153,38 +112,33 @@ def search_bangladesh_products(
     use_fallback_if_empty: bool = True
 ) -> List[Dict[str, Any]]:
     """
-    Unified product search combining direct store catalogs (Star Tech)
-    and DuckDuckGo web search across Bangladesh retailers.
-    Guarantees rich candidate product links with live 2026 data.
+    Store-agnostic open-web product search across Bangladesh e-commerce.
+    Dispatches neutral queries without favoring any single retailer.
     """
     all_results: List[Dict[str, Any]] = []
     seen_urls = set()
 
-    # 1. First: query direct live store catalogs (Star Tech)
-    primary_query = queries[0] if queries else "laptop"
-    catalog_results = search_startech_catalog(primary_query, max_results=12)
-    for item in catalog_results:
-        if item["url"] not in seen_urls:
-            seen_urls.add(item["url"])
-            all_results.append(item)
-
-    # 2. Second: query DuckDuckGo for wider store coverage (Ryans, Daraz, Pickaboo, etc.)
+    # Query DuckDuckGo across the provided neutral query set
     ddg_results = search_duckduckgo(queries, max_results_per_query=max_results_per_query)
     for item in ddg_results:
         if item["url"] not in seen_urls:
             seen_urls.add(item["url"])
             all_results.append(item)
 
-    # 3. If still under 5 results, try extra broad search
-    if len(all_results) < 5:
-        broader_queries = [f"{primary_query} price in bangladesh", f"site:ryans.com {primary_query}"]
+    # If results are sparse, expand with an open shopping query
+    if len(all_results) < 5 and queries:
+        primary_query = queries[0]
+        broader_queries = [
+            f"{primary_query} buy online Bangladesh",
+            f"{primary_query} price in BD",
+        ]
         extra_ddg = search_duckduckgo(broader_queries, max_results_per_query=5)
         for item in extra_ddg:
             if item["url"] not in seen_urls:
                 seen_urls.add(item["url"])
                 all_results.append(item)
 
-    # 4. Safe offline fallback only if network completely failed (0 results)
+    # Safe multi-category offline fallback only if internet is completely unreachable
     if not all_results and use_fallback_if_empty:
         all_results = _get_offline_mock_results(queries)
 
@@ -192,21 +146,66 @@ def search_bangladesh_products(
 
 
 def _get_offline_mock_results(queries: List[str]) -> List[Dict[str, Any]]:
-    """Fallback if internet is completely unreachable."""
+    """Multi-category fallback if internet is completely unreachable."""
     query_str = " ".join(queries).lower()
-    if "phone" in query_str or "smartphone" in query_str or "mobile" in query_str:
+
+    if any(k in query_str for k in ["shoe", "sneaker", "footwear", "boot"]):
         return [
             {
-                "url": "https://www.startech.com.bd/samsung-galaxy-a55-5g",
-                "title": "Samsung Galaxy A55 5G (8GB/128GB)",
-                "snippet": "Samsung Galaxy A55 5G price in Bangladesh is 46,999 BDT. 50MP OIS Camera, Exynos 1480, Super AMOLED 120Hz.",
-                "store": "Star Tech"
+                "url": "https://www.apex4u.com/product/mens-running-sneakers",
+                "title": "Apex Men's Sprint Cushion Running Shoes",
+                "snippet": "Apex Sprint Running Shoes price in Bangladesh: 4,990 BDT. Breathable mesh, EVA shock-absorbing sole, lightweight.",
+                "store": "Apex Footwear"
             },
             {
-                "url": "https://www.ryans.com/xiaomi-redmi-note-13-pro-plus",
-                "title": "Xiaomi Redmi Note 13 Pro+ 5G",
-                "snippet": "Xiaomi Redmi Note 13 Pro Plus 5G (8GB/256GB) Price: 42,000 BDT. 200MP Camera, 120W Fast Charging.",
-                "store": "Ryans Computers"
+                "url": "https://www.batabd.com/products/power-running-shoes",
+                "title": "Bata Power Cushioned Athletic Shoes",
+                "snippet": "Power by Bata Sport Athletic Shoes price in BD: 4,499 BDT. Durable rubber traction, memory foam insole, daily workout.",
+                "store": "Bata Bangladesh"
+            },
+            {
+                "url": "https://www.daraz.com.bd/products/mens-breathable-running-shoes",
+                "title": "Air Cushion Breathable Sport Sneakers",
+                "snippet": "Men's Air Cushion Sport Sneakers Price in Bangladesh: 3,250 BDT on Daraz. Anti-slip sole, lace-up casual athletic.",
+                "store": "Daraz Bangladesh"
+            }
+        ]
+
+    if any(k in query_str for k in ["fryer", "air fryer", "blender", "kitchen", "cooker"]):
+        return [
+            {
+                "url": "https://www.singerbd.com/product/singer-digital-air-fryer-4l",
+                "title": "Singer 4.2L Rapid Air Fryer with Digital Touch Display",
+                "snippet": "Singer Digital Air Fryer price in Bangladesh is 9,500 BDT. 1400W, 8 preset cooking programs, non-stick detachable basket.",
+                "store": "Singer Bangladesh"
+            },
+            {
+                "url": "https://www.waltonbd.com/small-appliances/walton-air-fryer",
+                "title": "Walton Primo Chef 5L Air Fryer (WA-50D)",
+                "snippet": "Walton 5 Litre Digital Air Fryer price: 8,800 BDT. 1500W power, 360-degree rapid air heating, touch control panel.",
+                "store": "Walton Plaza"
+            },
+            {
+                "url": "https://www.transcomdigital.com/philips-essential-airfryer",
+                "title": "Philips Essential HD9200/90 Airfryer (4.1L)",
+                "snippet": "Philips Essential Airfryer price in Bangladesh: 14,200 BDT. Rapid Air technology, 0.8kg basket, 1400W.",
+                "store": "Transcom Digital"
+            }
+        ]
+
+    if any(k in query_str for k in ["phone", "smartphone", "mobile"]):
+        return [
+            {
+                "url": "https://www.gadgetandgear.com/product/samsung-galaxy-a55-5g",
+                "title": "Samsung Galaxy A55 5G (8GB/128GB)",
+                "snippet": "Samsung Galaxy A55 5G price in Bangladesh is 46,999 BDT. 50MP OIS Camera, Exynos 1480, Super AMOLED 120Hz.",
+                "store": "Gadget & Gear"
+            },
+            {
+                "url": "https://www.daraz.com.bd/products/xiaomi-redmi-note-13-pro-plus",
+                "title": "Xiaomi Redmi Note 13 Pro+ 5G (8GB/256GB)",
+                "snippet": "Xiaomi Redmi Note 13 Pro Plus 5G Price: 42,000 BDT. 200MP Camera, 120W HyperCharge, IP68.",
+                "store": "Daraz Bangladesh"
             },
             {
                 "url": "https://www.pickaboo.com/product/nothing-phone-2a",
@@ -218,21 +217,21 @@ def _get_offline_mock_results(queries: List[str]) -> List[Dict[str, Any]]:
 
     return [
         {
-            "url": "https://www.startech.com.bd/lenovo-loq-15iax9-core-i5-12th-gen-rtx-4060-laptop",
-            "title": "Lenovo LOQ 15IAX9 Core i5 12th Gen RTX 4060 8GB Graphics Gaming Laptop",
+            "url": "https://www.ryans.com/lenovo-loq-15iax9-core-i5-12th-gen-rtx-4060-laptop",
+            "title": "Lenovo LOQ 15IAX9 Core i5 12th Gen RTX 4060 8GB Gaming Laptop",
             "snippet": "Lenovo LOQ 15 Gaming Laptop price in Bangladesh is 118,000 BDT. Core i5-12450HX, 16GB DDR5 RAM, 512GB SSD, RTX 4060 8GB GDDR6.",
-            "store": "Star Tech"
-        },
-        {
-            "url": "https://www.ryans.com/asus-tuf-gaming-a15-fa506nfr-ryzen-7-rtx-4050-laptop",
-            "title": "Asus TUF Gaming A15 Ryzen 7 RTX 4050 6GB Laptop",
-            "snippet": "Asus TUF Gaming A15 price in Bangladesh: 112,000 BDT. AMD Ryzen 7 7735HS, 16GB RAM, RTX 4050 6GB, 90Wh Battery.",
             "store": "Ryans Computers"
         },
         {
-            "url": "https://www.startech.com.bd/hp-victus-15-fa1093dx-gaming-laptop",
-            "title": "HP Victus 15-fa1093dx Core i5 13th Gen RTX 3050 Laptop",
+            "url": "https://www.techlandbd.com/asus-tuf-gaming-a15-fa506nfr-ryzen-7-rtx-4050-laptop",
+            "title": "Asus TUF Gaming A15 Ryzen 7 RTX 4050 6GB Laptop",
+            "snippet": "Asus TUF Gaming A15 price in Bangladesh: 112,000 BDT. AMD Ryzen 7 7735HS, 16GB RAM, RTX 4050 6GB, 90Wh Battery.",
+            "store": "TechLand BD"
+        },
+        {
+            "url": "https://www.daraz.com.bd/products/hp-victus-15-gaming-laptop",
+            "title": "HP Victus 15 Core i5 13th Gen RTX 3050 Laptop",
             "snippet": "HP Victus 15 price in Bangladesh is 89,000 BDT. Core i5-13420H, 16GB RAM, 512GB SSD, RTX 3050 6GB Graphics.",
-            "store": "Star Tech"
+            "store": "Daraz Bangladesh"
         }
     ]

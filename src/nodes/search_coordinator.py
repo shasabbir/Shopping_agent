@@ -23,14 +23,19 @@ def search_coordinator_node(state: ShoppingAgentState) -> ShoppingAgentState:
     # Primary exact search
     queries.append(target)
 
-    # Bangladesh store & price specific queries
-    queries.append(f"{target} price in bangladesh".strip())
-    queries.append(f"{target} Star Tech Ryans Bangladesh".strip())
+    # Neutral Bangladesh open-web shopping queries
+    queries.append(f"{target} buy online Bangladesh".strip())
+    queries.append(f"{target} price in Bangladesh".strip())
 
     if budget_str and budget_str not in target.lower():
-        queries.append(f"{target} {budget_str}".strip())
+        queries.append(f"{target} {budget_str} BDT Bangladesh".strip())
 
-    # Execute search - retrieve candidate products with priority on exact target
+    # Only if the user explicitly requested specific stores, add targeted store query
+    if req and req.preferred_stores:
+        store_str = " ".join(req.preferred_stores)
+        queries.append(f"{target} {store_str} Bangladesh".strip())
+
+    # Execute search - retrieve candidate products neutrally across all stores
     results = search_bangladesh_products(queries, max_results_per_query=5)
 
     logs = list(state.get("logs", []))

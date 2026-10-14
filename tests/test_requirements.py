@@ -33,6 +33,24 @@ def test_bangla_banglish_detection():
     assert req_bg.budget_max == 30000.0
 
 
+def test_footwear_requirement_extraction():
+    query = "running shoes under 5000 tk with good cushioning"
+    req = fallback_extract_requirement(query)
+    assert req.category == "footwear"
+    assert req.budget_max == 5000.0
+    assert "sports & fitness" in req.usage_purposes
+    assert req.preferred_stores == []
+
+
+def test_kitchen_appliance_requirement_extraction():
+    query = "digital air fryer under 10000 BDT for cooking"
+    req = fallback_extract_requirement(query)
+    assert req.category == "kitchen appliance"
+    assert req.budget_max == 10000.0
+    assert "cooking & kitchen" in req.usage_purposes
+    assert req.preferred_stores == []
+
+
 def test_requirement_analyzer_node():
     state: ShoppingAgentState = {
         "user_query": "Need monitor under 20000 for coding",
@@ -44,4 +62,6 @@ def test_requirement_analyzer_node():
     assert req.category == "monitor"
     assert req.budget_max == 20000.0
     assert len(result_state["logs"]) > 0
+    assert req.preferred_stores == []
+
 

@@ -3,6 +3,11 @@ import pandas as pd
 from src.models import RecommendationCard, ProductSpec
 
 
+STORE_PALETTE = [
+    "#2563eb", "#7c3aed", "#059669", "#d97706", "#dc2626",
+    "#0891b2", "#db2777", "#4f46e5", "#0d9488", "#ea580c"
+]
+
 STORE_COLORS = {
     "Star Tech": "#ef4444",
     "Ryans Computers": "#2563eb",
@@ -13,12 +18,24 @@ STORE_COLORS = {
     "Apple Gadgets BD": "#0ea5e9",
     "BDStall": "#14b8a6",
     "Vibe Gaming": "#a855f7",
+    "Apex Footwear": "#059669",
+    "Bata Bangladesh": "#dc2626",
+    "Aarong": "#b91c1c",
+    "Singer Bangladesh": "#e11d48",
+    "Walton Plaza": "#1d4ed8",
+    "Transcom Digital": "#0369a1",
 }
 
 
 def get_store_badge_html(store_name: str) -> str:
-    """Generate inline styled badge for retail store."""
-    color = STORE_COLORS.get(store_name, "#6b7280")
+    """Generate inline styled badge for any retail store with consistent colors."""
+    if store_name in STORE_COLORS:
+        color = STORE_COLORS[store_name]
+    else:
+        # Deterministic color hash for any newly discovered store domain
+        color_idx = abs(hash(store_name)) % len(STORE_PALETTE)
+        color = STORE_PALETTE[color_idx]
+
     return f"""<span style="background-color: {color}; color: white; padding: 3px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.025em;">{store_name}</span>"""
 
 
@@ -30,18 +47,24 @@ def format_bdt_price(price: float | None) -> str:
 
 
 def build_comparison_dataframe(recommendations: List[RecommendationCard]) -> pd.DataFrame:
-    """Transform list of up to 10 recommendations into a structured comparison table."""
+    """Transform recommendations into an adaptive comparison table with dynamic attribute columns."""
+    if not recommendations:
+        return pd.DataFrame()
+
+    # Discover top 3-4 most common specification keys across all products
+    key_frequency = {}
+    for card in recommendations:
+        for k in card.product.specs.keys():
+            if k and len(k) <= 25 and not k.startswith("Highlight") and not k.startswith("Feature"):
+                key_frequency[k] = key_frequency.get(k, 0) + 1
+
+    # Sort keys by frequency across products
+    top_keys = [k for k, _ in sorted(key_frequency.items(), key=lambda item: item[1], reverse=True)[:4]]
+
     data = []
     for card in recommendations:
         p: ProductSpec = card.product
         specs = p.specs or {}
-        
-        # Determine key specs based on product type
-        spec_items = list(specs.items())
-        spec_1 = specs.get("CPU") or specs.get("Switch Type") or (f"{spec_items[0][0]}: {spec_items[0][1]}" if len(spec_items) > 0 else "N/A")
-        spec_2 = specs.get("GPU") or specs.get("Camera") or specs.get("Lighting") or (f"{spec_items[1][0]}: {spec_items[1][1]}" if len(spec_items) > 1 else "N/A")
-        spec_3 = specs.get("RAM") or specs.get("Connectivity") or (f"{spec_items[2][0]}: {spec_items[2][1]}" if len(spec_items) > 2 else "N/A")
-        spec_4 = specs.get("Storage") or specs.get("Display") or specs.get("Key Count") or (f"{spec_items[3][0]}: {spec_items[3][1]}" if len(spec_items) > 3 else "N/A")
 
         row = {
             "Rank": f"#{card.rank}",
@@ -50,14 +73,20 @@ def build_comparison_dataframe(recommendations: List[RecommendationCard]) -> pd.
             "Price": format_bdt_price(p.price),
             "Rating": f"{card.score}/10",
             "Verdict": card.verdict,
-            "Spec #1": spec_1,
-            "Spec #2": spec_2,
-            "Spec #3": spec_3,
-            "Spec #4": spec_4,
-            "Warranty": p.warranty or "Standard Retail",
-            "Top Advantage": card.why_buy[0] if card.why_buy else "Solid all-rounder",
-            "Key Trade-off": card.why_not_buy[0] if card.why_not_buy else "Check local stock",
         }
+
+        # Inject dynamic attribute columns
+        if top_keys:
+            for k in top_keys:
+                row[k] = specs.get(k, "—")
+        else:
+            # Fallback if no structured keys discovered
+            row["Specifications"] = ", ".join(f"{k}: {v}" for k, v in list(specs.items())[:3]) or "Standard Details"
+
+        row["Warranty"] = p.warranty or "Standard Retail"
+        row["Top Advantage"] = card.why_buy[0] if card.why_buy else "Solid all-rounder"
+        row["Key Trade-off"] = card.why_not_buy[0] if card.why_not_buy else "Check local stock"
+
         data.append(row)
 
     return pd.DataFrame(data)

@@ -22,8 +22,8 @@ console = Console(force_terminal=True, legacy_windows=False)
 def print_banner():
     console.print(Panel.fit(
         "[bold cyan]🇧🇩 Bangladesh AI Shopping Decision Agent[/bold cyan]\n"
-        "[dim]Powered by LangGraph + Gemini + DuckDuckGo + Jina AI Reader[/dim]\n"
-        "[italic green]Specialized for Star Tech, Ryans, Daraz, Pickaboo & BD Retail[/italic green]",
+        "[dim]Powered by LangGraph + Gemini + Open Web Retrieval[/dim]\n"
+        "[italic green]Universal Multi-Category Shopping Across Bangladesh E-Commerce[/italic green]",
         border_style="cyan"
     ))
 

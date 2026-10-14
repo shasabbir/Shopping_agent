@@ -18,23 +18,25 @@ def test_build_comparison_dataframe():
     card = RecommendationCard(
         rank=1,
         product=ProductSpec(
-            name="Lenovo LOQ 15",
-            store="Star Tech",
-            price=118000.0,
-            url="https://startech.com.bd/loq",
-            specs={"GPU": "RTX 4060", "RAM": "16GB", "CPU": "Core i5"},
-            warranty="2 Years Official"
+            name="Apex Men's Sprint Running Shoes",
+            store="Apex Footwear",
+            price=4990.0,
+            url="https://apex4u.com/shoes",
+            specs={"Material": "Breathable Mesh", "Sole": "EVA Rubber", "Closure": "Lace-Up"},
+            warranty="Standard Retail"
         ),
         verdict="Top Pick ⭐",
         score=9.2,
-        why_buy=["Great GPU value"],
-        why_not_buy=["Runs warm under full load"],
-        who_should_buy="Gamers and AI developers"
+        why_buy=["Great cushioning"],
+        why_not_buy=["Limited color options"],
+        who_should_buy="Runners and fitness enthusiasts"
     )
     df = build_comparison_dataframe([card])
     assert len(df) == 1
-    assert df.iloc[0]["Product"] == "Lenovo LOQ 15"
-    assert df.iloc[0]["Price"] == "৳118,000"
+    assert df.iloc[0]["Product"] == "Apex Men's Sprint Running Shoes"
+    assert df.iloc[0]["Price"] == "৳4,990"
     assert df.iloc[0]["Rating"] == "9.2/10"
-    assert df.iloc[0]["Warranty"] == "2 Years Official"
+    assert "Material" in df.columns
+    assert df.iloc[0]["Material"] == "Breathable Mesh"
+
 

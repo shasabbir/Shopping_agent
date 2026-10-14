@@ -92,18 +92,27 @@ class MockShoppingLLM:
             query_match = re.search(r"user query:\s*(.*)", prompt_text, re.IGNORECASE)
             query_text = query_match.group(1).lower() if query_match else prompt_lower
 
-            if any(k in query_text for k in ["laptop", "notebook", "ultrabook", "macbook"]):
+            if any(k in query_text for k in ["shoe", "sneaker", "boot", "loafer"]):
+                category = "footwear"
+            elif any(k in query_text for k in ["shirt", "pant", "jacket", "dress", "panjabi"]):
+                category = "clothing"
+            elif any(k in query_text for k in ["air fryer", "blender", "oven", "cooker", "kettle"]):
+                category = "kitchen appliance"
+            elif any(k in query_text for k in ["chair", "desk", "table", "sofa"]):
+                category = "furniture"
+            elif any(k in query_text for k in ["perfume", "sunscreen", "serum", "lotion"]):
+                category = "beauty & personal care"
+            elif any(k in query_text for k in ["laptop", "notebook", "macbook"]):
                 category = "laptop"
             elif any(k in query_text for k in ["phone", "smartphone", "mobile"]):
                 category = "smartphone"
-            elif any(k in query_text for k in ["monitor", "display", "screen"]):
-                category = "monitor"
             else:
-                category = "laptop"
+                words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", query_text) if w not in ["need", "want", "suggest", "find", "best", "price", "taka", "bdt", "under", "good", "amar", "lagbe"]]
+                category = words[0] if words else "consumer product"
 
-            budget = 100000.0
-            k_match = re.search(r"(\d+(?:\d+)?)\s*(?:k|thousand)", query_text)
-            num_match = re.search(r"(\d{4,7})", query_text)
+            budget = 50000.0
+            k_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:k|thousand)", query_text)
+            num_match = re.search(r"(\d{3,7})", query_text)
             if k_match:
                 budget = float(k_match.group(1)) * 1000
             elif num_match:
@@ -112,16 +121,16 @@ class MockShoppingLLM:
             purposes = []
             if "game" in query_text or "gaming" in query_text:
                 purposes.append("gaming")
-            if "ai" in query_text or "ml" in query_text or "deep learning" in query_text:
-                purposes.append("AI development")
-            if "code" in query_text or "programming" in query_text or "coding" in query_text:
-                purposes.append("programming")
-            if "camera" in query_text or "photo" in query_text:
-                purposes.append("camera")
-            if "battery" in query_text:
-                purposes.append("battery life")
+            if "run" in query_text or "sport" in query_text or "fitness" in query_text:
+                purposes.append("sports & fitness")
+            if "office" in query_text or "work" in query_text or "code" in query_text:
+                purposes.append("office & productivity")
+            if "cook" in query_text or "kitchen" in query_text or "bake" in query_text:
+                purposes.append("kitchen & cooking")
+            if "waterproof" in query_text:
+                purposes.append("waterproof")
             if not purposes:
-                purposes.append("general daily use")
+                purposes.append("general consumer use")
 
             has_bangla_script = bool(re.search(r"[\u0980-\u09FF]", query_text))
             has_banglish_words = bool(re.search(r"\b(amar|amake|lagbe|bhalo|koto|dam)\b", query_text))
@@ -141,14 +150,24 @@ class MockShoppingLLM:
                 "usage_purposes": purposes,
                 "priorities": purposes[:2],
                 "must_have_specs": [],
-                "preferred_stores": ["Star Tech", "Ryans", "Daraz"],
+                "preferred_stores": [],
                 "detected_language": detected_lang
             })
 
         return json.dumps({
-            "summary": "Compared candidate options from top Bangladesh retailers.",
-            "winner": "Lenovo LOQ 15" if "laptop" in prompt_lower else "Samsung Galaxy A55",
-            "reasoning": "Offers the best performance-to-price ratio in the current Bangladesh market."
+            "winner_index": 0,
+            "summary": "Compared candidate options discovered across Bangladesh online retailers.",
+            "products": [
+                {
+                    "index": 0,
+                    "score": 9.2,
+                    "verdict": "Top Recommendation 🏆",
+                    "why_buy": ["Strong value for price in the current market", "Well reviewed by customers"],
+                    "why_not_buy": ["Check local outlet or online delivery readiness"],
+                    "who_should_buy": "Buyers looking for reliable quality within budget",
+                    "buyer_advice": "Verify return policy and cash/bKash discounts before purchasing"
+                }
+            ]
         })
 
     def _generate_structured_fallback(self, schema: Any, prompt_text: str):

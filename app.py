@@ -41,13 +41,10 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("⚙️ System Status")
     active_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
-    st.info(f"**LLM Engine:** `{active_model}`\n\n**Search:** Live Store Catalog + DuckDuckGo\n\n**Coverage:** 10 Products Analyzed")
+    st.info(f"**Target Market:** Bangladesh (BDT ৳)\n\n**LLM Engine:** `{active_model}`\n\n**Scope:** Universal Open Web")
 
-    st.markdown("### 🏬 Target Retailers")
-    st.checkbox("Star Tech (Live Catalog)", value=True, disabled=True)
-    st.checkbox("Ryans Computers", value=True, disabled=True)
-    st.checkbox("Daraz Bangladesh", value=True, disabled=True)
-    st.checkbox("Pickaboo", value=True, disabled=True)
+    st.markdown("### 🏬 Retailer Scope")
+    st.success("🌐 **Open Web (Unbiased)**\nSearches across all online stores, marketplaces, and brands in Bangladesh.")
 
     st.markdown("---")
     st.subheader("🕒 Search History")
@@ -62,33 +59,33 @@ with st.sidebar:
 
 
 # Main Header
-st.title("🛒 Live AI Shopping Decision & Comparison Agent")
+st.title("🛒 Universal AI Shopping Decision & Comparison Agent")
 st.markdown(
-    "Search **10 live products**, extract **real-time page elements & specifications**, "
-    "and get an instant **side-by-side comparison matrix** with expert buying recommendations."
+    "Search **live products across any category** in Bangladesh, extract **real-time specifications & microdata**, "
+    "and get an instant **side-by-side comparison matrix** with unbiased buying advice."
 )
 
 # Quick Suggestion Chips
-st.markdown("##### ⚡ Quick Scenarios")
+st.markdown("##### ⚡ Quick Scenarios Across Categories")
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    if st.button("💻 Laptop (< 100k BDT)", use_container_width=True):
-        st.session_state.search_query = "laptop under 100000 BDT in Bangladesh"
+    if st.button("👟 Running Shoes (< 5k)", use_container_width=True):
+        st.session_state.search_query = "running shoes under 5000 tk in Bangladesh"
         st.session_state.trigger_search = True
         st.rerun()
 with col2:
-    if st.button("⌨️ Mechanical Keyboard (< 5k)", use_container_width=True):
-        st.session_state.search_query = "mechanical keyboard under 5000 tk Star Tech"
+    if st.button("🍳 Air Fryer (< 10k)", use_container_width=True):
+        st.session_state.search_query = "digital air fryer under 10000 BDT in Bangladesh"
         st.session_state.trigger_search = True
         st.rerun()
 with col3:
-    if st.button("📱 Camera Phone (< 45k)", use_container_width=True):
-        st.session_state.search_query = "smartphone under 45k taka with great camera and battery"
+    if st.button("💻 Laptop (< 100k)", use_container_width=True):
+        st.session_state.search_query = "laptop under 100000 BDT in Bangladesh"
         st.session_state.trigger_search = True
         st.rerun()
 with col4:
-    if st.button("🎮 Gaming Laptop (RTX)", use_container_width=True):
-        st.session_state.search_query = "gaming laptop under 120k with dedicated GPU"
+    if st.button("💺 Office Chair (< 12k)", use_container_width=True):
+        st.session_state.search_query = "ergonomic office chair under 12000 tk in Bangladesh"
         st.session_state.trigger_search = True
         st.rerun()
 
@@ -99,10 +96,10 @@ with st.form("search_form", clear_on_submit=False):
     query_input = st.text_input(
         "What product are you looking to buy?",
         key="search_query",
-        placeholder="e.g. laptop under 100000 BDT, mechanical keyboard under 5000 tk, or 'smartphone under 35k'",
-        help="Type in English, Bangla, or Banglish with your target product and budget."
+        placeholder="e.g. 'running shoes under 5k', 'air fryer under 10000 BDT', 'laptop under 120k', or 'blender'",
+        help="Type in English, Bangla, or Banglish with any target product and optional budget."
     )
-    submit_button = st.form_submit_button("🔍 Search 10 Products, Analyze & Compare", type="primary", use_container_width=True)
+    submit_button = st.form_submit_button("🔍 Search Products, Analyze & Compare", type="primary", use_container_width=True)
 
 # Execution Logic
 should_search = (submit_button and query_input.strip()) or (st.session_state.trigger_search and st.session_state.search_query.strip())
