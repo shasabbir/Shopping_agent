@@ -314,7 +314,18 @@ def extract_elements_from_live_page(url: str, timeout: float = 3.5) -> Dict[str,
 
 
 def product_extractor_node(state: ShoppingAgentState) -> ShoppingAgentState:
-    """Extract structured elements from candidate pages neutrally across any product category."""
+    """Extract structured elements from candidate pages or verify freshness of local catalog products."""
+    existing_extracted = state.get("extracted_products", [])
+    logs = list(state.get("logs", []))
+
+    if existing_extracted:
+        logs.append(f"Catalog Intelligence: Serving {len(existing_extracted)} verified products from local database catalog.")
+        return {
+            **state,
+            "extracted_products": existing_extracted,
+            "logs": logs,
+        }
+
     candidates = state.get("candidate_urls", [])
     extracted: List[ProductSpec] = []
     seen_names = set()

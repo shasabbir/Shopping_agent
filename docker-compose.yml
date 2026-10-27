@@ -1,15 +1,39 @@
+version: "3.8"
+
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: shopping-agent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: shopping_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   shopping-agent:
     build:
       context: .
       dockerfile: Dockerfile
-      network: host
     container_name: shopping-agent-app
     restart: unless-stopped
     ports:
       - "8501:8501"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgrespassword@db:5432/shopping_agent
     env_file:
       - .env
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health')"]
       interval: 30s
@@ -21,3 +45,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  pgdata:

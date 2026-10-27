@@ -42,7 +42,13 @@ def format_products_for_llm(products: List[ProductSpec]) -> str:
     for i, p in enumerate(products):
         price_str = f"{p.price:,.0f} BDT" if p.price else "Price on inquiry"
         specs_str = ", ".join(f"{k}: {v}" for k, v in list(p.specs.items())[:6]) or p.raw_snippet or "Standard Attributes"
-        lines.append(f"[{i}] {p.name} | Store: {p.store} | Price: {price_str} | Specs: {specs_str}")
+        offers_str = ""
+        if p.offers and len(p.offers) > 1:
+            offers_summary = [f"{o.store_name}: ৳{o.price_bdt:,.0f}" for o in p.offers[:4]]
+            offers_str = f" | Competing Stores: {', '.join(offers_summary)}"
+            if p.savings:
+                offers_str += f" (Save ৳{p.savings:,.0f})"
+        lines.append(f"[{i}] {p.name} | Best Deal: {p.store} ({price_str}){offers_str} | Specs: {specs_str}")
     return "\n".join(lines)
 
 
@@ -176,6 +182,9 @@ def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
         who_should_buy = llm_info.get("who_should_buy") or f"Buyers seeking {req.category} at {prod.store}."
         advice = llm_info.get("buyer_advice") or llm_info.get("bangladesh_note") or f"Available via {prod.store}. Confirm warranty and delivery terms."
 
+        savings_text = f"Save ৳{prod.savings:,.0f} vs other stores" if prod.savings else None
+        best_seller_label = f"{prod.store} (Lowest Price)" if prod.offers and len(prod.offers) > 1 else prod.store
+
         card = RecommendationCard(
             rank=idx + 1,
             product=prod,
@@ -185,7 +194,9 @@ def recommendation_agent_node(state: ShoppingAgentState) -> ShoppingAgentState:
             why_not_buy=why_not,
             who_should_buy=who_should_buy,
             buyer_advice=advice,
-            bangladesh_note=advice
+            bangladesh_note=advice,
+            best_seller=best_seller_label,
+            savings_text=savings_text,
         )
         recommendation_cards.append(card)
 

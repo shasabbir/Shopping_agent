@@ -17,13 +17,33 @@ class UserRequirement(BaseModel):
     detected_language: str = Field(default="en", description="Language detected: en, bn, or banglish")
 
 
+class StoreOffer(BaseModel):
+    """Offer from an individual store for a canonical product."""
+    model_config = {"extra": "ignore"}
+    id: Optional[int] = None
+    store_name: str = "Store"
+    price_bdt: float = 0.0
+    regular_price_bdt: Optional[float] = None
+    url: str = ""
+    product_url: Optional[str] = None
+    in_stock: bool = True
+    warranty: Optional[str] = None
+    last_checked_at: Optional[str] = None
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if not self.url and self.product_url:
+            self.url = self.product_url
+
+
 class ProductSpec(BaseModel):
-    """Normalized product data extracted from retailer or web search."""
+    """Normalized canonical product data with multi-seller store offers."""
+    id: Optional[int] = None
     name: str
     brand: Optional[str] = None
-    price: Optional[float] = None
+    price: Optional[float] = None  # Lowest in-stock price
     currency: str = "BDT"
-    store: str = "Online Retailer"
+    store: str = "Multiple Sellers"
     url: str
     image_url: Optional[str] = None
     specs: Dict[str, str] = Field(default_factory=dict)
@@ -35,6 +55,10 @@ class ProductSpec(BaseModel):
     rating: Optional[float] = None
     review_count: Optional[int] = None
     raw_snippet: Optional[str] = None
+    offers: List[StoreOffer] = Field(default_factory=list, description="All competing store offers")
+    lowest_price: Optional[float] = None
+    highest_price: Optional[float] = None
+    savings: Optional[float] = None
 
 
 class RecommendationCard(BaseModel):
@@ -48,6 +72,8 @@ class RecommendationCard(BaseModel):
     who_should_buy: str = ""
     buyer_advice: Optional[str] = None
     bangladesh_note: Optional[str] = None
+    best_seller: Optional[str] = None
+    savings_text: Optional[str] = None
 
 
 class ShoppingAgentState(TypedDict, total=False):

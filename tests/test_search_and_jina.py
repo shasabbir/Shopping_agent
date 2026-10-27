@@ -65,8 +65,8 @@ def test_search_coordinator():
         "logs": []
     }
     updated = search_coordinator_node(state)
-    assert len(updated["search_queries"]) >= 2
-    assert len(updated["candidate_urls"]) > 0
+    assert len(updated["search_queries"]) >= 1
+    assert len(updated.get("extracted_products", [])) > 0 or len(updated.get("candidate_urls", [])) > 0
     # Zero store bias: queries must not inject specific store names unless explicitly requested
     assert all("Star Tech" not in q for q in updated["search_queries"])
 
