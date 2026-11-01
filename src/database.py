@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from sqlalchemy import (
     create_engine,
@@ -17,9 +17,14 @@ from sqlalchemy import (
     or_,
     and_,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship, scoped_session
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship, scoped_session, backref
 
 Base = declarative_base()
+
+
+def utc_now() -> datetime:
+    """Return naive UTC datetime for universal SQLite and PostgreSQL compatibility."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Store(Base):
@@ -161,33 +166,72 @@ class PriceHistory(Base):
     offer = relationship("Offer", back_populates="price_history")
 
 
+class CrawlFrontier(Base):
+    __tablename__ = "crawl_frontier"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    url = Column(String(1000), unique=True, nullable=False, index=True)
+    url_type = Column(String(50), default="product")  # 'sitemap', 'category', 'product'
+    priority = Column(Integer, default=10, index=True)  # 0: product, 10: category, 20: sitemap
+    status = Column(String(50), default="pending", index=True)  # 'pending', 'in_progress', 'completed', 'failed', 'dead'
+    depth = Column(Integer, default=0)
+    requires_browser = Column(Boolean, default=False)
+    retry_count = Column(Integer, default=0)
+    http_status = Column(Integer, nullable=True)
+    last_error = Column(Text, nullable=True)
+    next_eligible_at = Column(DateTime, default=utc_now, index=True)
+    last_crawled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utc_now)
+
+    store = relationship("Store", backref=backref("frontier_items", cascade="all, delete-orphan"))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "store_id": self.store_id,
+            "store_name": self.store.name if self.store else "Store",
+            "url": self.url,
+            "url_type": self.url_type,
+            "priority": self.priority,
+            "status": self.status,
+            "depth": self.depth,
+            "requires_browser": self.requires_browser,
+            "retry_count": self.retry_count,
+            "http_status": self.http_status,
+            "last_error": self.last_error,
+            "next_eligible_at": self.next_eligible_at.isoformat() if self.next_eligible_at else None,
+            "last_crawled_at": self.last_crawled_at.isoformat() if self.last_crawled_at else None,
+        }
+
+
 # 25 Default Bangladesh Stores
 DEFAULT_BANGLADESH_STORES = [
     {"name": "Star Tech", "base_url": "https://www.startech.com.bd", "sitemap_url": "https://www.startech.com.bd/sitemap.xml"},
     {"name": "Ryans Computers", "base_url": "https://www.ryans.com", "sitemap_url": "https://www.ryans.com/sitemap.xml"},
-    {"name": "TechLand BD", "base_url": "https://www.techlandbd.com", "sitemap_url": "https://www.techlandbd.com/sitemap.xml"},
-    {"name": "Pickaboo", "base_url": "https://www.pickaboo.com", "sitemap_url": "https://www.pickaboo.com/sitemap.xml"},
+    {"name": "TechLand BD", "base_url": "https://www.techlandbd.com", "sitemap_url": "https://www.techlandbd.com/sitemaps/product-sitemap-1.xml"},
+    {"name": "Pickaboo", "base_url": "https://www.pickaboo.com", "sitemap_url": "https://www.pickaboo.com/product/smartphone"},
     {"name": "Daraz Bangladesh", "base_url": "https://www.daraz.com.bd", "sitemap_url": "https://www.daraz.com.bd/sitemap.xml"},
-    {"name": "Apple Gadgets BD", "base_url": "https://www.applegadgetsbd.com", "sitemap_url": "https://www.applegadgetsbd.com/sitemap.xml"},
+    {"name": "Apple Gadgets BD", "base_url": "https://www.applegadgetsbd.com", "sitemap_url": "https://www.applegadgetsbd.com/product/sitemap.xml"},
     {"name": "Gadget & Gear", "base_url": "https://gadgetandgear.com", "sitemap_url": "https://gadgetandgear.com/sitemap.xml"},
     {"name": "Skyland BD", "base_url": "https://www.skyland.com.bd", "sitemap_url": "https://www.skyland.com.bd/sitemap.xml"},
     {"name": "Custom Mac BD", "base_url": "https://custommacbd.com", "sitemap_url": "https://custommacbd.com/sitemap.xml"},
-    {"name": "BDStall", "base_url": "https://www.bdstall.com", "sitemap_url": "https://www.bdstall.com/sitemap.xml"},
-    {"name": "Vibe Gaming", "base_url": "https://vibegaming.com.bd", "sitemap_url": "https://vibegaming.com.bd/sitemap.xml"},
+    {"name": "BDStall", "base_url": "https://www.bdstall.com", "sitemap_url": "https://www.bdstall.com/monitor/"},
+    {"name": "Vibe Gaming", "base_url": "https://vibegaming.com.bd", "sitemap_url": "https://vibegaming.com.bd/product-sitemap1.xml"},
     {"name": "Walton Plaza", "base_url": "https://waltonbd.com", "sitemap_url": "https://waltonbd.com/sitemap.xml"},
     {"name": "Singer Bangladesh", "base_url": "https://www.singerbd.com", "sitemap_url": "https://www.singerbd.com/sitemap.xml"},
     {"name": "Transcom Digital", "base_url": "https://transcomdigital.com", "sitemap_url": "https://transcomdigital.com/sitemap.xml"},
     {"name": "Butterfly Group", "base_url": "https://butterflygroupbd.com", "sitemap_url": "https://butterflygroupbd.com/sitemap.xml"},
-    {"name": "Apex Footwear", "base_url": "https://apex4u.com", "sitemap_url": "https://apex4u.com/sitemap.xml"},
+    {"name": "Apex Footwear", "base_url": "https://apex4u.com", "sitemap_url": "https://apex4u.com/sitemap_products.xml"},
     {"name": "Bata Bangladesh", "base_url": "https://www.batabd.com", "sitemap_url": "https://www.batabd.com/sitemap.xml"},
-    {"name": "Lotto Bangladesh", "base_url": "https://lotto.com.bd", "sitemap_url": "https://lotto.com.bd/sitemap.xml"},
-    {"name": "Aarong", "base_url": "https://www.aarong.com", "sitemap_url": "https://www.aarong.com/sitemap.xml"},
+    {"name": "Lotto Bangladesh", "base_url": "https://www.lottobd.com", "sitemap_url": "https://lottobd.com/sitemap.xml"},
+    {"name": "Aarong", "base_url": "https://www.aarong.com", "sitemap_url": "https://www.aarong.com/bgd/men/panjabi"},
     {"name": "Rokomari", "base_url": "https://www.rokomari.com", "sitemap_url": "https://www.rokomari.com/sitemap.xml"},
-    {"name": "Othoba", "base_url": "https://www.othoba.com", "sitemap_url": "https://www.othoba.com/sitemap.xml"},
+    {"name": "Othoba", "base_url": "https://www.othoba.com", "sitemap_url": None},
     {"name": "Chaldal", "base_url": "https://chaldal.com", "sitemap_url": "https://chaldal.com/sitemap.xml"},
     {"name": "Shwapno", "base_url": "https://www.shwapno.com", "sitemap_url": "https://www.shwapno.com/sitemap.xml"},
-    {"name": "Potaka BD", "base_url": "https://potakabd.com", "sitemap_url": "https://potakabd.com/sitemap.xml"},
-    {"name": "UCC BD", "base_url": "https://www.ucc.com.bd", "sitemap_url": "https://www.ucc.com.bd/sitemap.xml"},
+    {"name": "Potaka BD", "base_url": "https://potakait.com", "sitemap_url": "https://potakait.com/sitemap.xml"},
+    {"name": "UCC BD", "base_url": "https://www.ucc.com.bd", "sitemap_url": "https://www.ucc.com.bd/sitemaps/product-sitemap.xml"},
 ]
 
 
@@ -238,12 +282,14 @@ def init_db():
 
 
 def seed_default_stores():
-    """Populate default 25 Bangladesh stores if none exist."""
+    """Populate or update default 25 Bangladesh stores."""
     session = get_session()
     try:
-        count = session.query(Store).count()
-        if count == 0:
-            for s in DEFAULT_BANGLADESH_STORES:
+        for s in DEFAULT_BANGLADESH_STORES:
+            existing = session.query(Store).filter(
+                (Store.name == s["name"]) | (Store.base_url == s["base_url"])
+            ).first()
+            if not existing:
                 store_obj = Store(
                     name=s["name"],
                     base_url=s["base_url"],
@@ -252,8 +298,11 @@ def seed_default_stores():
                     status="idle",
                 )
                 session.add(store_obj)
-            session.commit()
-            print(f"[Database] Seeded {len(DEFAULT_BANGLADESH_STORES)} default Bangladesh stores.")
+            else:
+                existing.name = s["name"]
+                existing.base_url = s["base_url"]
+                existing.sitemap_url = s.get("sitemap_url")
+        session.commit()
     except Exception as e:
         session.rollback()
         print(f"[Database] Seed stores warning: {e}")
@@ -363,7 +412,7 @@ def upsert_crawled_offer(
     in_stock: bool = True,
     warranty: Optional[str] = None,
     specs: Optional[Dict[str, Any]] = None,
-    image_url: Optional[str] = None,
+    image_url: Optional[Any] = None,
     model_number: Optional[str] = None,
 ) -> Tuple[int, int]:
     """
@@ -371,6 +420,13 @@ def upsert_crawled_offer(
     then creates or updates the offer and records price history.
     Returns (product_id, offer_id).
     """
+    if isinstance(image_url, dict):
+        image_url = image_url.get("contentUrl") or image_url.get("url") or image_url.get("thumbnailUrl") or ""
+    elif isinstance(image_url, list) and image_url:
+        image_url = str(image_url[0])
+    elif image_url is not None:
+        image_url = str(image_url)
+
     session = get_session()
     try:
         norm_key = normalize_model_key(store_product_title)
@@ -585,5 +641,231 @@ def get_catalog_stats() -> Dict[str, Any]:
             "in_stock_offers": in_stock_offers,
             "latest_crawl": latest_crawl[0].isoformat() if latest_crawl and latest_crawl[0] else None,
         }
+    finally:
+        session.close()
+
+
+# ----------------------------------------------------
+# Crawl Frontier Queue Management
+# ----------------------------------------------------
+def ingest_frontier_urls(
+    store_id: int,
+    urls: List[str],
+    url_type: str = "product",
+    priority: int = 10,
+    depth: int = 0,
+    requires_browser: bool = False
+) -> int:
+    """Batch ingest URLs into crawl_frontier, ignoring duplicates. Returns count of newly inserted URLs."""
+    if not urls:
+        return 0
+    session = get_session()
+    inserted = 0
+    try:
+        clean_urls = list(dict.fromkeys(u.split("#")[0].strip() for u in urls if u and u.startswith("http")))
+        existing_urls = set(
+            u[0] for u in session.query(CrawlFrontier.url).filter(CrawlFrontier.url.in_(clean_urls)).all()
+        )
+        new_items = []
+        for u in clean_urls:
+            if u not in existing_urls:
+                new_items.append(
+                    CrawlFrontier(
+                        store_id=store_id,
+                        url=u,
+                        url_type=url_type,
+                        priority=priority,
+                        depth=depth,
+                        requires_browser=requires_browser,
+                        status="pending"
+                    )
+                )
+                existing_urls.add(u)
+                inserted += 1
+        if new_items:
+            session.bulk_save_objects(new_items)
+            session.commit()
+        return inserted
+    except Exception as e:
+        session.rollback()
+        print(f"[Database] Frontier ingest warning: {e}")
+        return 0
+    finally:
+        session.close()
+
+
+def pop_next_frontier_item(store_id: int) -> Optional[Dict[str, Any]]:
+    """Fetch and lock the next eligible pending item for a specific store."""
+    session = get_session()
+    now_utc = utc_now()
+    try:
+        # Auto-recover stale in_progress items older than 10 minutes
+        stale_threshold = now_utc - timedelta(minutes=10)
+        session.query(CrawlFrontier).filter(
+            CrawlFrontier.store_id == store_id,
+            CrawlFrontier.status == "in_progress",
+            CrawlFrontier.last_crawled_at < stale_threshold
+        ).update({"status": "pending"}, synchronize_session=False)
+
+        item = session.query(CrawlFrontier).filter(
+            CrawlFrontier.store_id == store_id,
+            CrawlFrontier.status == "pending",
+            CrawlFrontier.next_eligible_at <= now_utc
+        ).order_by(CrawlFrontier.priority.asc(), CrawlFrontier.id.asc()).first()
+        if item:
+            item.status = "in_progress"
+            item.last_crawled_at = now_utc
+            session.commit()
+            return item.to_dict()
+        session.commit()
+        return None
+    except Exception as e:
+        session.rollback()
+        print(f"[Database] Frontier pop error: {e}")
+        return None
+    finally:
+        session.close()
+
+
+def update_frontier_item_result(
+    frontier_id: int,
+    status: str,
+    http_status: Optional[int] = None,
+    error: Optional[str] = None,
+    backoff_seconds: int = 0
+):
+    """Update status, http_status, error, and next retry time for a frontier item."""
+    session = get_session()
+    try:
+        item = session.query(CrawlFrontier).filter(CrawlFrontier.id == frontier_id).first()
+        if item:
+            item.status = status
+            if http_status is not None:
+                item.http_status = http_status
+            if error:
+                item.last_error = str(error)[:500]
+            if status == "failed":
+                item.retry_count += 1
+                if item.retry_count > 3:
+                    item.status = "dead"
+                else:
+                    item.status = "pending"
+                    item.next_eligible_at = utc_now() + timedelta(seconds=backoff_seconds or 120)
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        print(f"[Database] Frontier update error: {e}")
+    finally:
+        session.close()
+
+
+def get_frontier_metrics() -> Dict[str, Any]:
+    """Return aggregated frontier queue health stats."""
+    session = get_session()
+    try:
+        total = session.query(CrawlFrontier).count()
+        pending = session.query(CrawlFrontier).filter(CrawlFrontier.status == "pending").count()
+        in_progress = session.query(CrawlFrontier).filter(CrawlFrontier.status == "in_progress").count()
+        completed = session.query(CrawlFrontier).filter(CrawlFrontier.status == "completed").count()
+        failed = session.query(CrawlFrontier).filter(CrawlFrontier.status == "failed").count()
+        dead = session.query(CrawlFrontier).filter(CrawlFrontier.status == "dead").count()
+
+        # Per store breakdown
+        store_records = [
+            {"id": s.id, "name": s.name}
+            for s in session.query(Store).filter(Store.is_active == True).order_by(Store.id.asc()).all()
+        ]
+        store_stats = []
+        for s in store_records:
+            s_pending = session.query(CrawlFrontier).filter(CrawlFrontier.store_id == s["id"], CrawlFrontier.status == "pending").count()
+            s_completed = session.query(CrawlFrontier).filter(CrawlFrontier.store_id == s["id"], CrawlFrontier.status == "completed").count()
+            store_stats.append({
+                "store_id": s["id"],
+                "store_name": s["name"],
+                "pending": s_pending,
+                "completed": s_completed,
+            })
+
+        return {
+            "total_urls": total,
+            "pending": pending,
+            "in_progress": in_progress,
+            "completed": completed,
+            "failed": failed,
+            "dead": dead,
+            "store_stats": store_stats
+        }
+    finally:
+        session.close()
+
+
+def seed_frontier_from_stores(reset_dead: bool = True):
+    """Ensure every active store has at least its sitemap or base_url in the frontier."""
+    session = get_session()
+    now_utc = utc_now()
+    try:
+        stores = [
+            {"id": s.id, "name": s.name, "sitemap_url": s.sitemap_url, "base_url": s.base_url}
+            for s in session.query(Store).filter(Store.is_active == True).all()
+        ]
+
+        for s in stores:
+            seed_url = s["sitemap_url"] or s["base_url"]
+            if not seed_url:
+                continue
+            clean_seed = seed_url.split("#")[0].strip()
+            url_type = "sitemap" if (s["sitemap_url"] and ".xml" in s["sitemap_url"]) else "category"
+
+            existing = session.query(CrawlFrontier).filter(CrawlFrontier.url == clean_seed).first()
+            if existing:
+                if reset_dead and existing.status in ["dead", "failed", "in_progress"]:
+                    existing.status = "pending"
+                    existing.retry_count = 0
+                    existing.next_eligible_at = now_utc
+                    existing.last_error = None
+                    existing.http_status = None
+            else:
+                session.add(
+                    CrawlFrontier(
+                        store_id=s["id"],
+                        url=clean_seed,
+                        url_type=url_type,
+                        priority=5 if url_type == "sitemap" else 10,
+                        depth=0,
+                        status="pending",
+                        next_eligible_at=now_utc
+                    )
+                )
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        print(f"[Database] Error seeding frontier: {e}")
+    finally:
+        session.close()
+
+
+def reset_failed_frontier_urls(store_id: Optional[int] = None, include_dead: bool = True) -> int:
+    """Reset failed and optionally dead URLs back to pending state for retry."""
+    session = get_session()
+    now_utc = utc_now()
+    try:
+        statuses = ["failed", "dead"] if include_dead else ["failed"]
+        query = session.query(CrawlFrontier).filter(CrawlFrontier.status.in_(statuses))
+        if store_id:
+            query = query.filter(CrawlFrontier.store_id == store_id)
+
+        items = query.all()
+        count = len(items)
+        for item in items:
+            item.status = "pending"
+            item.retry_count = 0
+            item.next_eligible_at = now_utc
+            item.last_error = None
+        session.commit()
+        return count
+    except Exception as e:
+        session.rollback()
+        print(f"[Database] Error resetting failed URLs: {e}")
+        return 0
     finally:
         session.close()

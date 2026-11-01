@@ -91,8 +91,8 @@ def test_db_upsert_and_multi_seller_clustering():
     init_db()
     from src.database import get_session, Product, Offer
     session = get_session()
-    session.query(Offer).delete()
-    session.query(Product).delete()
+    session.query(Offer).filter(Offer.store_product_title.like("%Lenovo LOQ%")).delete(synchronize_session=False)
+    session.query(Product).filter(Product.canonical_name.like("%Lenovo LOQ%")).delete(synchronize_session=False)
     session.commit()
     session.close()
 

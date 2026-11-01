@@ -1,5 +1,6 @@
 import os
 import time
+from typing import Dict, Any, List, Optional
 import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
@@ -13,8 +14,17 @@ from src.database import (
     delete_store,
     get_catalog_stats,
     search_catalog,
+    get_frontier_metrics,
+    seed_frontier_from_stores,
+    reset_failed_frontier_urls,
 )
 from src.crawler.universal_crawler import UniversalStoreCrawler
+from src.crawler.daemon_crawler import (
+    start_crawler_daemon,
+    stop_crawler_daemon,
+    is_crawler_daemon_running,
+    get_crawler_daemon,
+)
 from src.graph import run_shopping_agent
 from src.models import ShoppingAgentState, UserRequirement, ProductSpec, StoreOffer
 from src.ui_helpers import (
@@ -327,16 +337,96 @@ with tab_crawler:
     sm3.metric("Indexed Products", f"{catalog_stats['total_products']} Items")
     sm4.metric("Store Offers", f"{catalog_stats['total_offers']} Deals")
 
+    # Continuous Stealth Crawler Section (Anti-Bot Pattern)
+    st.subheader("🤖 Continuous Stealth Crawler Daemon (Anti-Bot Pattern)")
+    st.markdown(
+        "Runs an **interleaved multi-store round-robin** crawler continuously in the background until all product data is gathered. "
+        "Rotates TLS client personas, calculates human log-normal delay jitter, and automatically enforces per-host cooldowns to prevent IP blocks."
+    )
+
+    daemon_running = is_crawler_daemon_running()
+    daemon = get_crawler_daemon()
+    frontier_stats = get_frontier_metrics()
+
+    # Metric Row for Frontier & Daemon Health
+    fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+    fc1.metric("Daemon Status", "🟢 Running" if daemon_running else "⚪ Idle")
+    fc2.metric("Queue Pending", f"{frontier_stats['pending']:,} URLs")
+    fc3.metric("Indexed / Completed", f"{frontier_stats['completed']:,} URLs")
+    fc4.metric("Dead / Retries", f"{frontier_stats.get('dead', 0):,} Dead / {frontier_stats['failed']:,} Failed")
+    active_cooldowns = [
+        s["name"] for s in active_stores if hasattr(daemon, "circuit_breaker") and not daemon.circuit_breaker.is_eligible(s["id"])
+    ] if daemon_running else []
+    fc5.metric("Hosts in Cooldown", f"{len(active_cooldowns)} Stores")
+
+    col_d1, col_d2, col_d3 = st.columns([2, 1, 1.2])
+    with col_d1:
+        speed_choice = st.selectbox(
+            "Anti-Bot Cadence Profile:",
+            options=["stealth", "normal", "turbo"],
+            index=1,
+            format_func=lambda x: {
+                "stealth": "🛡️ High Stealth (3.0s - 12.0s Log-Normal + 20s Reading Pauses)",
+                "normal": "⚡ Balanced (1.8s - 7.5s Log-Normal Jitter)",
+                "turbo": "🚀 Turbo (0.8s - 3.5s Rapid Gathering)"
+            }.get(x, x),
+            disabled=daemon_running
+        )
+    with col_d2:
+        st.write("")
+        st.write("")
+        if not daemon_running:
+            if st.button("▶ Start Continuous Crawler", type="primary", use_container_width=True):
+                seed_frontier_from_stores(reset_dead=True)
+                reset_failed_frontier_urls()
+                start_crawler_daemon(speed_profile=speed_choice)
+                st.success("Continuous Stealth Daemon started in background!")
+                time.sleep(0.5)
+                st.rerun()
+        else:
+            if st.button("⏹ Stop Daemon", type="secondary", use_container_width=True):
+                stop_crawler_daemon()
+                st.warning("Stop requested. Daemon will conclude current host cycle.")
+                time.sleep(0.5)
+                st.rerun()
+    with col_d3:
+        st.write("")
+        st.write("")
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("🔄 Refresh", use_container_width=True):
+                st.rerun()
+        with col_btn2:
+            if st.button("♻️ Revive", use_container_width=True, help="Reset dead and failed URLs back to pending"):
+                revived = reset_failed_frontier_urls()
+                st.toast(f"Revived {revived} URLs back to pending queue!")
+                time.sleep(0.5)
+                st.rerun()
+
+    if daemon_running:
+        status_info = daemon.get_status()
+        cur_store = status_info.get("current_store")
+        cur_url = status_info.get("current_url")
+        if cur_store in ["Idle / Waiting", "Idle / Stopped"] or not cur_store:
+            st.info("💤 **Daemon Status:** Standing by. Interleaving hosts or waiting on next eligible items.")
+        else:
+            st.info(f"⏳ **Active Host:** `{cur_store}` | **Target:** `{cur_url[:75] if cur_url else 'Processing...'}`")
+        if active_cooldowns:
+            st.warning(f"🛡️ **Hosts currently cooling down (rate-limit protection):** {', '.join(active_cooldowns)}")
+
+    with st.expander("📜 Live Daemon Event Stream & Logs", expanded=daemon_running):
+        daemon_logs = daemon.recent_logs if hasattr(daemon, "recent_logs") and daemon.recent_logs else ["Daemon idle. Click 'Start Continuous Crawler' to begin."]
+        st.code("\n".join(daemon_logs[-15:]), language="text")
+
     st.markdown("---")
 
     # Sequential Crawler Execution Controls
-    st.subheader("⚡ Sequential Catalog Crawler")
+    st.subheader("⚡ Manual Batch Crawler (Single Pass)")
     col_ctl1, col_ctl2 = st.columns([2, 1])
 
     with col_ctl1:
         st.markdown(
-            "Click **Run Sequential Update** to crawl all active stores one by one. Discovered items are automatically normalized, "
-            "clustered into canonical products, and indexed with competing seller prices."
+            "Click **Run Sequential Update** to execute an immediate single-pass sweep through active stores."
         )
     with col_ctl2:
         max_items_per_store = st.slider("Max items per store:", min_value=5, max_value=40, value=15, step=5)
