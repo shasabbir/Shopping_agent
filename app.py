@@ -17,6 +17,7 @@ from src.database import (
     get_frontier_metrics,
     seed_frontier_from_stores,
     reset_failed_frontier_urls,
+    optimize_frontier_and_revive_products,
 )
 from src.crawler.universal_crawler import UniversalStoreCrawler
 from src.crawler.daemon_crawler import (
@@ -72,13 +73,40 @@ with st.sidebar:
     st.caption("Bangladesh Multi-Store Intelligence & AI Recommendations")
 
     st.markdown("---")
+    st.subheader("⚡ Live Auto-Refresh")
+    auto_refresh_enabled = st.toggle(
+        "Auto-Refresh Dashboard",
+        value=True,
+        help="Continuously live-streams crawler velocity, active workers, queue sizes, and catalog counts every 2 seconds without page reloading."
+    )
+    refresh_rate = st.select_slider(
+        "Refresh Interval",
+        options=[1, 2, 3, 5, 10],
+        value=2,
+        format_func=lambda s: f"{s} sec",
+        disabled=not auto_refresh_enabled,
+    ) if auto_refresh_enabled else None
+
+    st.markdown("---")
     st.subheader("📊 Catalog Intelligence")
-    col_sb1, col_sb2 = st.columns(2)
-    col_sb1.metric("Products", f"{catalog_stats['total_products']}")
-    col_sb2.metric("Offers", f"{catalog_stats['total_offers']}")
-    st.caption(f"🏪 Active Stores: **{catalog_stats['active_stores']} / {catalog_stats['total_stores']}**")
-    if catalog_stats.get("latest_crawl"):
-        st.caption(f"🕒 Last Crawled: `{catalog_stats['latest_crawl'][:16].replace('T', ' ')}`")
+
+    @st.fragment(run_every=refresh_rate if auto_refresh_enabled else None)
+    def render_sidebar_metrics():
+        stats = get_catalog_stats()
+        d_running = is_crawler_daemon_running()
+        daemon = get_crawler_daemon()
+        tp = daemon.get_status().get("throughput", {}) if d_running and daemon else {}
+
+        col_sb1, col_sb2 = st.columns(2)
+        col_sb1.metric("Products", f"{stats['total_products']:,}")
+        col_sb2.metric("Offers", f"{stats['total_offers']:,}")
+        st.caption(f"🏪 Active Stores: **{stats['active_stores']} / {stats['total_stores']}**")
+        if d_running and tp.get("req_per_min"):
+            st.caption(f"⚡ Live Speed: **{tp.get('req_per_min', 0):.0f} req/m** | **{tp.get('prod_per_min', 0):.0f} items/m**")
+        if stats.get("latest_crawl"):
+            st.caption(f"🕒 Last Crawled: `{stats['latest_crawl'][:16].replace('T', ' ')}`")
+
+    render_sidebar_metrics()
 
     st.markdown("---")
     st.subheader("⚙️ System Status")
@@ -327,15 +355,20 @@ with tab_crawler:
         "The universal extractor parses Schema.org JSON-LD, OpenGraph, Microdata, and HTML structures **without any store-specific code**."
     )
 
-    # Store Metrics Overview
-    all_stores = get_all_stores()
-    active_stores = [s for s in all_stores if s["is_active"]]
+    # Top Store Metrics Overview (Auto-Refreshed Fragment)
+    @st.fragment(run_every=refresh_rate if auto_refresh_enabled else None)
+    def render_top_store_metrics():
+        all_stores_cur = get_all_stores()
+        active_stores_cur = [s for s in all_stores_cur if s["is_active"]]
+        cat_stats_cur = get_catalog_stats()
 
-    sm1, sm2, sm3, sm4 = st.columns(4)
-    sm1.metric("Configured Stores", f"{len(all_stores)} Stores")
-    sm2.metric("Active Crawl Targets", f"{len(active_stores)} Stores")
-    sm3.metric("Indexed Products", f"{catalog_stats['total_products']} Items")
-    sm4.metric("Store Offers", f"{catalog_stats['total_offers']} Deals")
+        sm1, sm2, sm3, sm4 = st.columns(4)
+        sm1.metric("Configured Stores", f"{len(all_stores_cur)} Stores")
+        sm2.metric("Active Crawl Targets", f"{len(active_stores_cur)} Stores")
+        sm3.metric("Indexed Products", f"{cat_stats_cur['total_products']:,} Items")
+        sm4.metric("Store Offers", f"{cat_stats_cur['total_offers']:,} Deals")
+
+    render_top_store_metrics()
 
     # Continuous Stealth Crawler Section (Anti-Bot Pattern)
     st.subheader("🤖 Continuous Stealth Crawler Daemon (Anti-Bot Pattern)")
@@ -345,33 +378,32 @@ with tab_crawler:
     )
 
     daemon_running = is_crawler_daemon_running()
-    daemon = get_crawler_daemon()
-    frontier_stats = get_frontier_metrics()
 
-    # Metric Row for Frontier & Daemon Health
-    fc1, fc2, fc3, fc4, fc5 = st.columns(5)
-    fc1.metric("Daemon Status", "🟢 Running" if daemon_running else "⚪ Idle")
-    fc2.metric("Queue Pending", f"{frontier_stats['pending']:,} URLs")
-    fc3.metric("Indexed / Completed", f"{frontier_stats['completed']:,} URLs")
-    fc4.metric("Dead / Retries", f"{frontier_stats.get('dead', 0):,} Dead / {frontier_stats['failed']:,} Failed")
-    active_cooldowns = [
-        s["name"] for s in active_stores if hasattr(daemon, "circuit_breaker") and not daemon.circuit_breaker.is_eligible(s["id"])
-    ] if daemon_running else []
-    fc5.metric("Hosts in Cooldown", f"{len(active_cooldowns)} Stores")
-
-    col_d1, col_d2, col_d3 = st.columns([2, 1, 1.2])
+    col_d1, col_d2, col_d3 = st.columns([2.0, 1.1, 1.3])
     with col_d1:
-        speed_choice = st.selectbox(
-            "Anti-Bot Cadence Profile:",
-            options=["stealth", "normal", "turbo"],
-            index=1,
-            format_func=lambda x: {
-                "stealth": "🛡️ High Stealth (3.0s - 12.0s Log-Normal + 20s Reading Pauses)",
-                "normal": "⚡ Balanced (1.8s - 7.5s Log-Normal Jitter)",
-                "turbo": "🚀 Turbo (0.8s - 3.5s Rapid Gathering)"
-            }.get(x, x),
-            disabled=daemon_running
-        )
+        c_speed, c_conc = st.columns([1.1, 0.9])
+        with c_speed:
+            speed_choice = st.selectbox(
+                "Anti-Bot Cadence Profile:",
+                options=["stealth", "normal", "turbo"],
+                index=1,
+                format_func=lambda x: {
+                    "stealth": "🛡️ High Stealth (3-12s + 20s pauses)",
+                    "normal": "⚡ Balanced (1.8s - 7.5s Jitter)",
+                    "turbo": "🚀 Turbo (0.8s - 3.5s Rapid Gathering)"
+                }.get(x, x),
+                disabled=daemon_running
+            )
+        with c_conc:
+            concurrency_choice = st.slider(
+                "Parallel Host Workers:",
+                min_value=1,
+                max_value=12,
+                value=6,
+                step=1,
+                help="Number of distinct store websites to crawl concurrently in parallel. Anti-bot dwell time and circuit breakers are strictly enforced per store.",
+                disabled=daemon_running
+            )
     with col_d2:
         st.write("")
         st.write("")
@@ -379,22 +411,23 @@ with tab_crawler:
             if st.button("▶ Start Continuous Crawler", type="primary", use_container_width=True):
                 seed_frontier_from_stores(reset_dead=True)
                 reset_failed_frontier_urls()
-                start_crawler_daemon(speed_profile=speed_choice)
-                st.success("Continuous Stealth Daemon started in background!")
+                optimize_frontier_and_revive_products()
+                start_crawler_daemon(speed_profile=speed_choice, concurrency=concurrency_choice)
+                st.success(f"Continuous Stealth Daemon started with {concurrency_choice} parallel host workers!")
                 time.sleep(0.5)
                 st.rerun()
         else:
             if st.button("⏹ Stop Daemon", type="secondary", use_container_width=True):
                 stop_crawler_daemon()
-                st.warning("Stop requested. Daemon will conclude current host cycle.")
+                st.warning("Stop requested. Daemon will conclude current host requests.")
                 time.sleep(0.5)
                 st.rerun()
     with col_d3:
         st.write("")
         st.write("")
-        col_btn1, col_btn2 = st.columns(2)
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
         with col_btn1:
-            if st.button("🔄 Refresh", use_container_width=True):
+            if st.button("🔄 Refresh", use_container_width=True, help="Immediate manual refresh"):
                 st.rerun()
         with col_btn2:
             if st.button("♻️ Revive", use_container_width=True, help="Reset dead and failed URLs back to pending"):
@@ -402,21 +435,92 @@ with tab_crawler:
                 st.toast(f"Revived {revived} URLs back to pending queue!")
                 time.sleep(0.5)
                 st.rerun()
+        with col_btn3:
+            if st.button("⚡ Clean", use_container_width=True, help="Clean non-product assets, reclassify categories, revive real products & boost product sitemaps"):
+                opt_stats = optimize_frontier_and_revive_products()
+                st.toast(f"Cleaned {opt_stats['dead_assets_cleaned']} assets, reclassified {opt_stats['reclassified_categories']} categories, revived {opt_stats['revived_products']} real products, elevated {opt_stats['sitemaps_elevated']} sitemaps!")
+                time.sleep(0.5)
+                st.rerun()
 
-    if daemon_running:
-        status_info = daemon.get_status()
-        cur_store = status_info.get("current_store")
-        cur_url = status_info.get("current_url")
-        if cur_store in ["Idle / Waiting", "Idle / Stopped"] or not cur_store:
-            st.info("💤 **Daemon Status:** Standing by. Interleaving hosts or waiting on next eligible items.")
-        else:
-            st.info(f"⏳ **Active Host:** `{cur_store}` | **Target:** `{cur_url[:75] if cur_url else 'Processing...'}`")
-        if active_cooldowns:
-            st.warning(f"🛡️ **Hosts currently cooling down (rate-limit protection):** {', '.join(active_cooldowns)}")
+    # Live Crawler Telemetry, Active Workers & Event Stream (Auto-Refreshed Fragment)
+    @st.fragment(run_every=refresh_rate if auto_refresh_enabled else None)
+    def render_crawler_live_dashboard():
+        d_running = is_crawler_daemon_running()
+        daemon_inst = get_crawler_daemon()
+        frontier_stats = get_frontier_metrics()
+        status_info = daemon_inst.get_status() if daemon_inst else {}
+        throughput = status_info.get("throughput", {})
+        worker_slots = status_info.get("worker_slots", {})
+        active_worker_cnt = status_info.get("active_worker_count", 0)
+        current_concurrency = status_info.get("concurrency", 6)
+        active_cooldowns = status_info.get("cooldown_stores", [])
 
-    with st.expander("📜 Live Daemon Event Stream & Logs", expanded=daemon_running):
-        daemon_logs = daemon.recent_logs if hasattr(daemon, "recent_logs") and daemon.recent_logs else ["Daemon idle. Click 'Start Continuous Crawler' to begin."]
-        st.code("\n".join(daemon_logs[-15:]), language="text")
+        # Live Header Indicator
+        col_hdr1, col_hdr2 = st.columns([3, 1])
+        with col_hdr1:
+            st.markdown("##### 📊 Live Daemon Telemetry & Frontier Health")
+        with col_hdr2:
+            if auto_refresh_enabled:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:12px; color:#10b981; padding-top:4px;'>"
+                    f"🟢 <b>Live Stream:</b> Every {refresh_rate}s"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:12px; color:#94a3b8; padding-top:4px;'>"
+                    f"⚪ Auto-Refresh Paused"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+        # Metric Row
+        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+        fc1.metric(
+            "Daemon Status",
+            f"🟢 Running ({active_worker_cnt}/{current_concurrency} Workers)" if d_running else "⚪ Idle"
+        )
+        fc2.metric(
+            "Crawl Throughput",
+            f"{throughput.get('req_per_min', 0):.0f} req / min" if d_running else f"{frontier_stats['pending']:,} Pending",
+            help="Real-time requests executed across all store hosts over the last 60 seconds."
+        )
+        fc3.metric(
+            "Indexing Velocity",
+            f"{throughput.get('prod_per_min', 0):.0f} items / min" if d_running else f"{frontier_stats['completed']:,} Completed",
+            help="Real-time new products and offers verified and indexed per minute."
+        )
+        fc4.metric("Queue Pending", f"{frontier_stats['pending']:,} URLs")
+        fc5.metric("Completed / Indexed", f"{frontier_stats['completed']:,} URLs")
+
+        if d_running and active_cooldowns:
+            st.warning(f"🛡️ **Hosts currently cooling down (rate-limit backoff):** {', '.join(active_cooldowns)}")
+
+        # Live Worker Pool Status Grid
+        if d_running and worker_slots:
+            st.markdown("##### 🚀 Multi-Host Active Worker Pool")
+            slot_cols = st.columns(min(6, max(1, len(worker_slots))))
+            for idx, (w_id, slot) in enumerate(sorted(worker_slots.items())):
+                c_idx = idx % len(slot_cols)
+                w_status = slot.get("status", "idle")
+                w_store = slot.get("store") or "Idle"
+                w_url = slot.get("url") or ""
+                badge = "🟢" if w_status == "crawling" else "💤"
+                clean_url = w_url.split("/")[-1] if w_url else "Waiting for next eligible host"
+                slot_cols[c_idx].markdown(
+                    f"<div style='background-color:#1e293b; padding:8px 10px; border-radius:8px; border-left:3px solid {'#10b981' if w_status == 'crawling' else '#64748b'}; margin-bottom:8px; font-size:12px;'>"
+                    f"<b>{badge} Worker {w_id + 1}:</b> {w_store[:16]}<br/>"
+                    f"<span style='color:#94a3b8; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block;'>{clean_url[:24]}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+        with st.expander("📜 Live Daemon Event Stream & Logs", expanded=d_running):
+            daemon_logs = daemon_inst.recent_logs if hasattr(daemon_inst, "recent_logs") and daemon_inst.recent_logs else ["Daemon idle. Click 'Start Continuous Crawler' to begin."]
+            st.code("\n".join(daemon_logs[-15:]), language="text")
+
+    render_crawler_live_dashboard()
 
     st.markdown("---")
 
@@ -487,26 +591,32 @@ with tab_crawler:
                 except Exception as e:
                     st.error(f"Error saving store: {e}")
 
-    # Store Inventory Table
-    st.subheader(f"📋 Configured Store Roster ({len(all_stores)} Stores)")
-    
-    table_data = []
-    for s in all_stores:
-        table_data.append({
-            "ID": s["id"],
-            "Store Name": s["name"],
-            "Active": "✅ Yes" if s["is_active"] else "❌ No",
-            "Status": s["status"].upper(),
-            "Items Indexed": s["total_products_found"] or 0,
-            "Last Crawled": (s["last_crawled_at"][:16].replace("T", " ") if s.get("last_crawled_at") else "Never"),
-            "Base URL": s["base_url"],
-        })
+    # Store Inventory Table (Auto-Refreshed Fragment)
+    @st.fragment(run_every=max(3, refresh_rate or 3) if auto_refresh_enabled else None)
+    def render_store_roster_table():
+        stores_list = get_all_stores()
+        st.subheader(f"📋 Configured Store Roster ({len(stores_list)} Stores)")
 
-    df_stores = pd.DataFrame(table_data)
-    st.dataframe(df_stores, use_container_width=True, hide_index=True)
+        table_data = []
+        for s in stores_list:
+            table_data.append({
+                "ID": s["id"],
+                "Store Name": s["name"],
+                "Active": "✅ Yes" if s["is_active"] else "❌ No",
+                "Status": s["status"].upper(),
+                "Items Indexed": s["total_products_found"] or 0,
+                "Last Crawled": (s["last_crawled_at"][:16].replace("T", " ") if s.get("last_crawled_at") else "Never"),
+                "Base URL": s["base_url"],
+            })
+
+        df_stores = pd.DataFrame(table_data)
+        st.dataframe(df_stores, use_container_width=True, hide_index=True)
+
+    render_store_roster_table()
 
     # Store Action Controls
     st.markdown("##### ⚙️ Manage Individual Stores")
+    all_stores = get_all_stores()
     store_options = {f"{s['name']} (ID: {s['id']})": s["id"] for s in all_stores}
     selected_store_label = st.selectbox("Select a store to manage:", list(store_options.keys()))
 
@@ -550,28 +660,32 @@ with tab_catalog:
     with col_q2:
         cat_filter = st.selectbox("Category:", ["all", "laptop", "smartphone", "footwear", "kitchen appliance", "gadgets", "general"])
 
-    category_arg = None if cat_filter == "all" else cat_filter
-    matching_products = search_catalog(query_text=cat_search or "", category=category_arg, limit=30)
+    @st.fragment(run_every=max(3, refresh_rate or 3) if auto_refresh_enabled else None)
+    def render_catalog_explorer_results(query_str, category_filter):
+        category_arg = None if category_filter == "all" else category_filter
+        matching_products = search_catalog(query_text=query_str or "", category=category_arg, limit=30)
 
-    st.markdown(f"**Found {len(matching_products)} products in local database:**")
+        st.markdown(f"**Found {len(matching_products)} products in local database:**")
 
-    for p in matching_products:
-        with st.container(border=True):
-            p_cols = st.columns([1, 4])
-            with p_cols[0]:
-                if p.get("primary_image_url"):
-                    st.image(p["primary_image_url"], width="stretch")
-                else:
-                    st.image("https://img.icons8.com/fluency/96/box.png", width=80)
-            with p_cols[1]:
-                lowest_price_str = format_bdt_price(p.get("lowest_price"))
-                st.subheader(p["canonical_name"])
-                st.markdown(f"<span class='price-tag'>{lowest_price_str}</span> <span style='color:#64748b;'>({p.get('offers_count', 0)} store offers)</span>", unsafe_allow_html=True)
-                
-                # Render offers
-                offers = [StoreOffer(**o) for o in p.get("offers", [])]
-                st.markdown(render_sellers_html(offers), unsafe_allow_html=True)
+        for p in matching_products:
+            with st.container(border=True):
+                p_cols = st.columns([1, 4])
+                with p_cols[0]:
+                    if p.get("primary_image_url"):
+                        st.image(p["primary_image_url"], width="stretch")
+                    else:
+                        st.image("https://img.icons8.com/fluency/96/box.png", width=80)
+                with p_cols[1]:
+                    lowest_price_str = format_bdt_price(p.get("lowest_price"))
+                    st.subheader(p["canonical_name"])
+                    st.markdown(f"<span class='price-tag'>{lowest_price_str}</span> <span style='color:#64748b;'>({p.get('offers_count', 0)} store offers)</span>", unsafe_allow_html=True)
 
-                if p.get("specs"):
-                    for k, v in list(p["specs"].items())[:4]:
-                        st.markdown(f"<span class='spec-chip'><strong>{k}:</strong> {v}</span>", unsafe_allow_html=True)
+                    # Render offers
+                    offers = [StoreOffer(**o) for o in p.get("offers", [])]
+                    st.markdown(render_sellers_html(offers), unsafe_allow_html=True)
+
+                    if p.get("specs"):
+                        for k, v in list(p["specs"].items())[:4]:
+                            st.markdown(f"<span class='spec-chip'><strong>{k}:</strong> {v}</span>", unsafe_allow_html=True)
+
+    render_catalog_explorer_results(cat_search, cat_filter)

@@ -16,6 +16,7 @@ from sqlalchemy import (
     desc,
     or_,
     and_,
+    event,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, scoped_session, backref
 
@@ -250,19 +251,45 @@ def get_db_url() -> str:
     return f"sqlite:///{db_path}"
 
 
+def _setup_sqlite_pragmas(engine):
+    """Enable WAL mode and concurrency tuning for SQLite."""
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.execute("PRAGMA cache_size=-64000")
+        except Exception as e:
+            pass
+        finally:
+            cursor.close()
+
+
 def get_engine():
     global _engine
     if _engine is None:
         url = get_db_url()
         try:
             if url.startswith("sqlite"):
-                _engine = create_engine(url, connect_args={"check_same_thread": False})
+                _engine = create_engine(
+                    url,
+                    connect_args={"check_same_thread": False, "timeout": 30.0},
+                    pool_pre_ping=True,
+                )
+                _setup_sqlite_pragmas(_engine)
             else:
                 _engine = create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20)
         except Exception as e:
             print(f"[Database] Failed to connect to primary DB ({url}): {e}. Falling back to SQLite.")
             db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "shopping_agent.db")
-            _engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+            _engine = create_engine(
+                f"sqlite:///{db_path}",
+                connect_args={"check_same_thread": False, "timeout": 30.0},
+                pool_pre_ping=True,
+            )
+            _setup_sqlite_pragmas(_engine)
     return _engine
 
 
@@ -867,5 +894,76 @@ def reset_failed_frontier_urls(store_id: Optional[int] = None, include_dead: boo
         session.rollback()
         print(f"[Database] Error resetting failed URLs: {e}")
         return 0
+    finally:
+        session.close()
+
+
+def optimize_frontier_and_revive_products() -> Dict[str, int]:
+    """
+    1. Reclassifies real product URLs incorrectly tagged as 'category' (e.g. TechLand TVs/printers) to 'product'.
+    2. Revives real product URLs that completed without creating offers (e.g. Singer BD, Shwapno).
+    3. Deactivates/cleans up asset/image/account URLs erroneously classified as products.
+    4. Reclassifies category/brand URLs to url_type='category'.
+    5. Elevates pending product sitemaps to priority=1 so true product catalogs are ingested first.
+    """
+    from src.crawler.universal_crawler import get_url_product_priority
+    session = get_session()
+    now_utc = utc_now()
+    stats = {
+        "revived_products": 0,
+        "reclassified_products": 0,
+        "dead_assets_cleaned": 0,
+        "reclassified_categories": 0,
+        "sitemaps_elevated": 0,
+    }
+    try:
+        existing_offer_urls = set(u[0] for u in session.query(Offer.product_url).all())
+
+        # 1. Clean assets / images / account utility URLs (status='dead')
+        all_items = session.query(CrawlFrontier).all()
+        for item in all_items:
+            prio = get_url_product_priority(item.url)
+
+            # Asset / utility check
+            if prio == 99:
+                if item.status != "dead":
+                    item.status = "dead"
+                    stats["dead_assets_cleaned"] += 1
+                continue
+
+            # Product sitemap check
+            if item.url_type == "sitemap":
+                if "product" in item.url.lower() and item.status == "pending" and item.priority != 1:
+                    item.priority = 1
+                    item.next_eligible_at = now_utc
+                    stats["sitemaps_elevated"] += 1
+                continue
+
+            # Real product (priority 0-3)
+            if prio <= 3:
+                if item.url_type != "product":
+                    item.url_type = "product"
+                    item.priority = prio
+                    stats["reclassified_products"] += 1
+                if item.url not in existing_offer_urls and item.status in ["completed", "failed", "in_progress"]:
+                    item.status = "pending"
+                    item.retry_count = 0
+                    item.next_eligible_at = now_utc
+                    item.last_error = None
+                    stats["revived_products"] += 1
+
+            # Category / listing (priority 10)
+            elif prio == 10:
+                if item.url_type != "category":
+                    item.url_type = "category"
+                    item.priority = 10
+                    stats["reclassified_categories"] += 1
+
+        session.commit()
+        return stats
+    except Exception as e:
+        session.rollback()
+        print(f"[Database] Error optimizing frontier: {e}")
+        return stats
     finally:
         session.close()

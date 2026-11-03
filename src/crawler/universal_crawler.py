@@ -36,50 +36,85 @@ PRODUCT_URL_PATTERNS = [
     r"\.html?$",
 ]
 
-PRODUCT_URL_REGEX = re.compile("|".join(PRODUCT_URL_PATTERNS), re.IGNORECASE)
+# Asset extensions and media files
+ASSET_PATTERNS = [
+    r"\.(?:webp|jpg|jpeg|png|gif|svg|css|js|pdf|ico|woff|woff2|ttf|mp4|webm)(?:\?.*)?$",
+    r"/image/cache/", r"/images/cache/", r"/wp-content/uploads/",
+]
+ASSET_REGEX = re.compile("|".join(ASSET_PATTERNS), re.IGNORECASE)
 
-SPECIFIC_PRODUCT_REGEX = re.compile(
-    r"/product-detail/|/product_detail/|/details/|/buy/|/item/|/book/\d+|"
-    r"route=product/product|product_id=\d+|-p-\d+|-p-[a-zA-Z0-9_-]+|-i\d+-s\d+|-\d{5,}\b",
+# Utility / Account non-product pages
+UTILITY_PATTERNS = [
+    r"/(?:account|cart|checkout|login|register|wishlist|compare|review|question|faq|terms|privacy|about|contact|help|delivery|policy|track-order|store-locator)(?:/|\?|$)",
+    r"/(?:my-account|customer-service|refund-policy|terms-conditions|contact-us|help-request|reward-points|spin-the-wheel|service-request|book-a-store-visit)\b",
+    r"/(?:privacy-policy|terms-and-conditions|about-us|cookie-policy|affiliate|careers?)\b",
+    r"/details/(?:privacy|about|terms|cookie|help|faq)\b",
+    r"/(?:daraz-affiliate-program|daraz-exclusive-products|daraz-cares)\b",
+]
+UTILITY_REGEX = re.compile("|".join(UTILITY_PATTERNS), re.IGNORECASE)
+
+# Category / Brand / Listing paths
+CATEGORY_PATTERNS = [
+    r"/(?:category|categories|brand|brands|tag|tags|collections?|collection|manufacturer|all-products|new-arrival|deals|search|catalog)(?:/|\?|$)",
+    r"daraz\.com\.bd/[^/?]+-\d{4,}/?$",
+]
+CATEGORY_LISTING_REGEX = re.compile("|".join(CATEGORY_PATTERNS), re.IGNORECASE)
+
+DARAZ_PRODUCT_REGEX = re.compile(
+    r"daraz\.com\.bd/(?:products/[^/]+-)?i\d+-s\d+\.html?",
     re.IGNORECASE
 )
+
+SPECIFIC_PRODUCT_REGEX = re.compile(
+    r"/product-detail/|/product_detail/|/buy/|/item/|/book/\d+|"
+    r"route=product/product|-p-\d+|-p-[a-zA-Z0-9_-]+|-i\d+-s\d+\.html?|"
+    r"/products/[^/]+-i\d+|-p\d{4,}\.html?",
+    re.IGNORECASE
+)
+
+PRODUCT_URL_REGEX = re.compile("|".join(PRODUCT_URL_PATTERNS), re.IGNORECASE)
+
+# Ignored non-product links (combined)
+IGNORED_PATTERNS = ASSET_PATTERNS + UTILITY_PATTERNS
+IGNORED_REGEX = re.compile("|".join(IGNORED_PATTERNS), re.IGNORECASE)
 
 
 def get_url_product_priority(url: str) -> int:
     r"""
     Priority ranking for URL candidates:
-    0: Explicit high-confidence product detail patterns (e.g. /product-detail/, route=product/product, -p-sku, -\d{5})
-    1: Explicit product path (/product/, /products/) with 2+ hyphens in slug
-    2: Explicit product path (/product/, /products/)
-    3: Generic multi-hyphen descriptive slug (2+ hyphens)
-    10: Generic fallback link
+    99: Ignored assets / media files / account / utility links
+    10: Category, brand, search, or listing pages
+    0:  Explicit high-confidence product detail patterns (e.g. /product-detail/, route=product/product, -i-s.html, -p-sku)
+    1:  Explicit product path (/product/, /products/) with 2+ hyphens in slug
+    2:  Explicit product path (/product/, /products/)
+    3:  Descriptive root slug with 2+ hyphens (e.g. Star Tech, TechLand, Potaka, Shwapno)
     """
+    if ASSET_REGEX.search(url) or UTILITY_REGEX.search(url):
+        return 99
+
+    if DARAZ_PRODUCT_REGEX.search(url):
+        return 0
+
+    if CATEGORY_LISTING_REGEX.search(url):
+        return 10
+
     if SPECIFIC_PRODUCT_REGEX.search(url):
         return 0
-    p = urlparse(url)
-    full_path = p.path + ("?" + p.query if p.query else "")
-    if PRODUCT_URL_REGEX.search(full_path):
-        return 1 if p.path.count("-") >= 2 else 2
-    if p.path.count("-") >= 2:
-        return 3
-    return 10
 
-# Ignored non-product links
-IGNORED_PATTERNS = [
-    r"/cart", r"/checkout", r"/account", r"/login", r"/register",
-    r"/privacy", r"/terms", r"/about", r"/contact", r"/blog",
-    r"/faq", r"/returns", r"/tag/", r"/category/", r"/collections?/",
-    r"/brand/", r"/search", r"/feed", r"/information/", r"/delivery",
-    r"/branches", r"/locations", r"/policy", r"/manufacturer",
-    r"/all-products", r"-products$", r"/new-arrival", r"/deals",
-    r"/track-order", r"/wishlist", r"/help", r"/store-locator",
-    r"/terms-conditions", r"/contact-us", r"/help-request",
-    r"/reward-points", r"/spin-the-wheel", r"/service-request",
-    r"/book-a-store-visit", r"/ac-cleaning-service-request",
-    r"/suggested-items", r"/cookie-policy", r"/my-aarong-rewards",
-    r"\.css", r"\.js", r"\.jpg", r"\.png", r"\.webp", r"\.svg", r"\.gif"
-]
-IGNORED_REGEX = re.compile("|".join(IGNORED_PATTERNS), re.IGNORECASE)
+    p = urlparse(url)
+    clean_path = p.path.rstrip("/")
+    if not clean_path:
+        return 10
+
+    # Explicit product path
+    if re.search(r"^/products?/", clean_path, re.IGNORECASE):
+        return 1 if clean_path.count("-") >= 2 else 2
+
+    # Root-level multi-hyphen descriptive slug (Star Tech, TechLand, Potaka, Shwapno)
+    if clean_path.count("/") == 1 and clean_path.count("-") >= 2:
+        return 3
+
+    return 10
 
 
 def create_http_session(timeout: float = 8.0) -> Tuple[Any, str]:

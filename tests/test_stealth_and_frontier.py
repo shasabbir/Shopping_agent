@@ -134,3 +134,37 @@ def test_daemon_sitemap_and_category_processing():
     store = {"id": 1, "name": "Star Tech", "base_url": "https://www.startech.com.bd"}
     links = crawler._extract_links_from_category(store, "https://www.startech.com.bd/category/laptops", sample_html)
     assert isinstance(links, list)
+
+
+def test_concurrent_multi_host_crawler_mechanics():
+    crawler = ContinuousStealthCrawler(speed_profile="turbo", concurrency=4)
+    assert crawler.concurrency == 4
+    status = crawler.get_status()
+    assert "throughput" in status
+    assert "req_per_min" in status["throughput"]
+    assert "prod_per_min" in status["throughput"]
+
+    # Test non-blocking per-host cadence tracking
+    cadence = crawler.cadence
+    assert cadence.is_store_cadence_eligible(101) is True
+    delay = cadence.record_store_request(101, speed_profile="turbo")
+    assert delay > 0.0
+    assert cadence.is_store_cadence_eligible(101) is False
+    assert cadence.is_store_cadence_eligible(102) is True  # Distinct host is unaffected!
+
+    # Test exclusive store claims
+    stores = [
+        {"id": 101, "name": "Store A"},
+        {"id": 102, "name": "Store B"}
+    ]
+    # Store 101 is in cadence cooldown, so claim should select Store 102
+    claimed = crawler._claim_next_eligible_store(stores)
+    assert claimed is not None
+    assert claimed["id"] == 102
+
+    # Now Store 102 is claimed (in-flight) and 101 is in cooldown, so no stores available
+    claimed_second = crawler._claim_next_eligible_store(stores)
+    assert claimed_second is None
+
+    # Release Store 102
+    crawler._in_flight_stores.discard(102)

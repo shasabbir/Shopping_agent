@@ -2,6 +2,7 @@ import os
 import math
 import time
 import random
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from urllib.parse import urlparse
@@ -105,6 +106,33 @@ class AntiBotCadence:
     def __init__(self):
         self.request_counts: Dict[int, int] = {}
         self.burst_thresholds: Dict[int, int] = {}
+        self._store_cooldown_until: Dict[int, float] = {}
+        self._lock = threading.Lock()
+
+    def record_store_request(self, store_id: int, speed_profile: str = "normal") -> float:
+        """
+        Calculates and applies human-like dwell time for this store,
+        scheduling its next eligible request timestamp without blocking other stores.
+        """
+        delay = self.calculate_delay(store_id=store_id, speed_profile=speed_profile)
+        with self._lock:
+            self._store_cooldown_until[store_id] = time.time() + delay
+        return delay
+
+    def is_store_cadence_eligible(self, store_id: int) -> bool:
+        """Checks if a store has finished its inter-request dwell cooldown."""
+        with self._lock:
+            return time.time() >= self._store_cooldown_until.get(store_id, 0.0)
+
+    def get_remaining_cadence_delay(self, store_id: int) -> float:
+        """Returns remaining dwell seconds for a store (0.0 if ready)."""
+        with self._lock:
+            rem = self._store_cooldown_until.get(store_id, 0.0) - time.time()
+            return max(0.0, round(rem, 2))
+
+    def reset_store_cadence(self, store_id: int):
+        with self._lock:
+            self._store_cooldown_until[store_id] = 0.0
 
     def calculate_delay(self, store_id: Optional[int] = None, speed_profile: str = "normal") -> float:
         """
@@ -155,65 +183,101 @@ class StoreCircuitBreaker:
     def __init__(self):
         # store_id -> {"failures": int, "cooldown_until": datetime, "mode": "http"|"browser", "consecutive_429": int}
         self.health_records: Dict[int, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
 
     def get_record(self, store_id: int) -> Dict[str, Any]:
-        if store_id not in self.health_records:
-            self.health_records[store_id] = {
-                "failures": 0,
-                "cooldown_until": datetime.now(timezone.utc),
-                "mode": "http",
-                "consecutive_429": 0,
-                "last_success": None,
-                "last_error": None
-            }
-        return self.health_records[store_id]
+        with self._lock:
+            if store_id not in self.health_records:
+                self.health_records[store_id] = {
+                    "failures": 0,
+                    "cooldown_until": datetime.now(timezone.utc),
+                    "mode": "http",
+                    "consecutive_429": 0,
+                    "last_success": None,
+                    "last_error": None
+                }
+            return self.health_records[store_id]
 
     def is_eligible(self, store_id: int) -> bool:
         """Check if store is currently out of cooldown."""
-        rec = self.get_record(store_id)
-        return datetime.now(timezone.utc) >= rec["cooldown_until"]
+        with self._lock:
+            rec = self.health_records.get(store_id)
+            if not rec:
+                return True
+            return datetime.now(timezone.utc) >= rec["cooldown_until"]
 
     def get_remaining_cooldown(self, store_id: int) -> int:
-        rec = self.get_record(store_id)
-        rem = (rec["cooldown_until"] - datetime.now(timezone.utc)).total_seconds()
-        return max(0, int(rem))
+        with self._lock:
+            rec = self.health_records.get(store_id)
+            if not rec:
+                return 0
+            rem = (rec["cooldown_until"] - datetime.now(timezone.utc)).total_seconds()
+            return max(0, int(rem))
 
     def record_success(self, store_id: int):
-        rec = self.get_record(store_id)
-        rec["failures"] = 0
-        rec["consecutive_429"] = 0
-        rec["cooldown_until"] = datetime.now(timezone.utc)
-        rec["last_success"] = datetime.now(timezone.utc)
-        rec["last_error"] = None
+        with self._lock:
+            if store_id not in self.health_records:
+                self.health_records[store_id] = {
+                    "failures": 0,
+                    "cooldown_until": datetime.now(timezone.utc),
+                    "mode": "http",
+                    "consecutive_429": 0,
+                    "last_success": None,
+                    "last_error": None
+                }
+            rec = self.health_records[store_id]
+            rec["failures"] = 0
+            rec["consecutive_429"] = 0
+            rec["cooldown_until"] = datetime.now(timezone.utc)
+            rec["last_success"] = datetime.now(timezone.utc)
+            rec["last_error"] = None
 
     def record_failure(self, store_id: int, status_code: Optional[int], error_msg: Optional[str] = None):
-        rec = self.get_record(store_id)
-        rec["failures"] += 1
-        rec["last_error"] = error_msg or f"HTTP {status_code}"
-        now_utc = datetime.now(timezone.utc)
+        with self._lock:
+            if store_id not in self.health_records:
+                self.health_records[store_id] = {
+                    "failures": 0,
+                    "cooldown_until": datetime.now(timezone.utc),
+                    "mode": "http",
+                    "consecutive_429": 0,
+                    "last_success": None,
+                    "last_error": None
+                }
+            rec = self.health_records[store_id]
+            rec["failures"] += 1
+            rec["last_error"] = error_msg or f"HTTP {status_code}"
+            now_utc = datetime.now(timezone.utc)
 
-        if status_code == 429:
-            rec["consecutive_429"] += 1
-            # Exponential backoff: 2^n * 60s + jitter (up to 30 mins)
-            backoff_secs = min(1800, (2 ** rec["consecutive_429"]) * 60 + random.randint(15, 60))
-            rec["cooldown_until"] = now_utc + timedelta(seconds=backoff_secs)
-        elif status_code == 403 or (error_msg and ("challenge" in error_msg.lower() or "moment" in error_msg.lower())):
-            # Escalate store to browser mode and apply 60s jitter cooldown
-            rec["mode"] = "browser"
-            rec["cooldown_until"] = now_utc + timedelta(seconds=random.randint(60, 120))
-        elif status_code and 500 <= status_code <= 599:
-            # Transient server error: 3-5 min pause
-            rec["cooldown_until"] = now_utc + timedelta(seconds=random.randint(180, 300))
-        else:
-            # General error: small 30s penalty
-            rec["cooldown_until"] = now_utc + timedelta(seconds=30)
+            if status_code == 429:
+                rec["consecutive_429"] += 1
+                backoff_secs = min(1800, (2 ** rec["consecutive_429"]) * 60 + random.randint(15, 60))
+                rec["cooldown_until"] = now_utc + timedelta(seconds=backoff_secs)
+            elif status_code == 403 or (error_msg and ("challenge" in error_msg.lower() or "moment" in error_msg.lower())):
+                rec["mode"] = "browser"
+                rec["cooldown_until"] = now_utc + timedelta(seconds=random.randint(60, 120))
+            elif status_code and 500 <= status_code <= 599:
+                rec["cooldown_until"] = now_utc + timedelta(seconds=random.randint(180, 300))
+            else:
+                rec["cooldown_until"] = now_utc + timedelta(seconds=30)
 
     def get_recommended_mode(self, store_id: int) -> str:
-        """Returns 'http' or 'browser' based on past challenge history."""
-        return self.get_record(store_id)["mode"]
+        with self._lock:
+            rec = self.health_records.get(store_id)
+            return rec["mode"] if rec else "http"
 
     def force_browser_mode(self, store_id: int):
-        self.get_record(store_id)["mode"] = "browser"
+        with self._lock:
+            if store_id not in self.health_records:
+                self.health_records[store_id] = {
+                    "failures": 0,
+                    "cooldown_until": datetime.now(timezone.utc),
+                    "mode": "browser",
+                    "consecutive_429": 0,
+                    "last_success": None,
+                    "last_error": None
+                }
+            else:
+                self.health_records[store_id]["mode"] = "browser"
 
 
 class PlaywrightHumanizer:

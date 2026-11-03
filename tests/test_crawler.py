@@ -167,3 +167,56 @@ def test_universal_crawler_sitemap_discovery():
     assert "https://example.com/product/laptop-1" in discovered
     assert "https://example.com/product/phone-2" in discovered
     assert "https://example.com/cart" not in discovered
+
+
+def test_nextjs_and_escaped_script_extraction():
+    """Test extracting prices and names from Next.js App Router / RSC payloads and escaped JSON."""
+    # Singer BD-style embedded JSON state with escaped quotes and sell_price
+    singer_html = """
+    <html><head><title>Google TV | Singer Bangladesh Limited</title></head>
+    <body>
+    <script>
+    self.__next_f.push([1,"{\\\"product\\\":{\\\"slug\\\":\\\"singer-google-tv-32-inch-slg32d3200wtv\\\",\\\"regular_price\\\":30990,\\\"sell_price\\\":27990,\\\"name\\\":\\\"Google TV\\\"}}"]);
+    </script>
+    </body></html>
+    """
+    res = UniversalProductExtractor.extract_from_html(singer_html, "https://www.singerbd.com/product/singer-google-tv-32-inch-slg32d3200wtv")
+    assert res["price_bdt"] in [27990.0, 30990.0]
+    assert "Singer Google Tv 32 Inch Slg32D3200Wtv" in res["name"]
+
+    # Shwapno-style Next.js RSC payload with formatted currency string
+    shwapno_html = """
+    <html><head><title>Shop Parachute Advanced Extra Care Hair Oil 150ml at Shwapno.com | Grocery</title></head>
+    <body>
+    <script>
+    self.__next_f.push([1,"{\\\"price\\\":{\\\"price\\\":\\\"৳210\\\"},\\\"in_stock\\\":true}"]);
+    </script>
+    </body></html>
+    """
+    res2 = UniversalProductExtractor.extract_from_html(shwapno_html, "https://www.shwapno.com/parachute-advanced-extra-care-hair-oil-150ml-2")
+    assert res2["price_bdt"] == 210.0
+    assert "Parachute Advanced Extra Care Hair Oil 150ml" in res2["name"]
+    assert "Shop" not in res2["name"]
+
+
+def test_url_priority_filtering_of_assets_and_categories():
+    """Verify that images, utility links, and categories are filtered out from product priorities."""
+    from src.crawler.universal_crawler import get_url_product_priority
+
+    # Assets & utility links must return 99 (ignored)
+    assert get_url_product_priority("https://www.skyland.com.bd/image/cache/catalog/A4TECH/a4tech-bloody.webp") == 99
+    assert get_url_product_priority("https://potakait.com/account/review?product_id=2711") == 99
+    assert get_url_product_priority("https://www.skyland.com.bd/product/compare") == 99
+
+    # Category / brand pages must return 10 (not a product <= 3)
+    assert get_url_product_priority("https://www.ryans.com/category/all-laptop-gaming") == 10
+    assert get_url_product_priority("https://www.daraz.com.bd/sensodyne-1-26797/") == 10
+    assert get_url_product_priority("https://www.daraz.com.bd/green-tea-14565/") == 10
+
+    # Real products must return <= 3
+    assert get_url_product_priority("https://www.daraz.com.bd/i452410383-s2164530023.html") == 0
+    assert get_url_product_priority("https://www.daraz.com.bd/products/samsung-galaxy-s24-ultra-i452410383-s2164530023.html") == 0
+    assert get_url_product_priority("https://www.singerbd.com/product/singer-google-tv-32-inch-slg32d3200wtv") == 1
+    assert get_url_product_priority("https://www.startech.com.bd/fantech-helios-ux3-space-edition-gaming-mouse") == 3
+    assert get_url_product_priority("https://www.techlandbd.com/asus-rog-strix-g16-gaming-laptop") == 3
+

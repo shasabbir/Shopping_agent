@@ -26,6 +26,9 @@ class UniversalProductExtractor:
             return ""
         import html
         clean = html.unescape(html.unescape(title.strip()))
+        # Remove leading "Shop " and trailing "at Store.com"
+        clean = re.sub(r"^\s*Shop\s+", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"\s+at\s+[\w.-]+\s*$", "", clean, flags=re.IGNORECASE)
         # Remove seller prefixes or suffixes separated by pipe, dash, or colon
         clean = re.sub(r"\s*\|\s*.*$", "", clean)
         clean = re.sub(r"\s*-\s*(?:Online Grocery Shopping.*|Buy Online|Price in BD|Lowest Price|Best Price|Daraz|Star Tech|Ryans|Pickaboo|Techland|Apex|Bata|Aarong|Walton|Singer|Chaldal|Shwapno|Potaka|UCC).*$", "", clean, flags=re.IGNORECASE)
@@ -49,8 +52,8 @@ class UniversalProductExtractor:
         # Convert Bengali numerals (০-৯) to Arabic numerals (0-9)
         norm_text = text.translate(cls.BN_TO_EN_DIGITS)
 
-        # Check for out of stock signals
-        if re.search(r"\b(?:out of stock|to be announced|tba|upcoming|discontinued|sold out|call for price|স্টক আউট)\b", norm_text, re.IGNORECASE):
+        # Check for non-priced out-of-stock signals (without digits)
+        if re.search(r"\b(?:to be announced|tba|upcoming|call for price)\b", norm_text, re.IGNORECASE) and not re.search(r"\d{2,}", norm_text):
             return None
 
         # Pattern 1: Digits followed by BDT/Tk/৳/টাকা or '/-' symbol (e.g. '115,000৳', '45,000 BDT', '2,400 Tk', '1,250/-')
@@ -231,6 +234,18 @@ class UniversalProductExtractor:
             if raw_title:
                 result["name"] = cls.clean_title(raw_title)
 
+        # Title Fallback: check if missing or too generic (<= 2 words or empty)
+        if not result["name"] or len(result["name"].split()) <= 2:
+            p = urlparse(url)
+            slug = p.path.strip("/").split("/")[-1]
+            slug = re.sub(r"\.html?$", "", slug)
+            if slug and slug.count("-") >= 2:
+                clean_slug = slug.replace("-", " ").title()
+                if result["name"] and result["name"].lower() not in clean_slug.lower():
+                    result["name"] = f"{result['name']} {clean_slug}".strip()
+                else:
+                    result["name"] = clean_slug
+
         # Image
         if not result["image_url"]:
             og_img = soup.find("meta", property="og:image")
@@ -253,7 +268,7 @@ class UniversalProductExtractor:
                     pass
 
         # ----------------------------------------------------
-        # TIER 3: Embedded Script & State JSON (SPA / Daraz / Next.js)
+        # TIER 3: Embedded Script & State JSON (SPA / Daraz / Next.js / RSC)
         # ----------------------------------------------------
         if not result["price_bdt"]:
             # Check for pdpTrackingData (Daraz / Lazada / Alibaba)
@@ -276,26 +291,43 @@ class UniversalProductExtractor:
                     pass
 
         if not result["price_bdt"]:
-            # General script JSON price regex
+            # General script JSON price regex matching escaped and unescaped quotes in Next.js, Nuxt, React RSC
             script_prices = re.findall(
-                r'"(?:pdt_price|pdt_discount_price|salePrice|sale_price|current_price|lowPrice|price)":\s*(?:"([^"]+)"|([0-9.]+))',
+                r'\\?"(?:pdt_discount_price|salePrice|sale_price|sell_price|offer_price|final_price|special_price|current_price|lowPrice|price|regular_price|pdt_price|base_price)\\?":\s*'
+                r'(?:\\?"([^\\",}]+)\\?"|([0-9.,]+))',
                 html_content,
                 re.IGNORECASE
             )
             for str_val, num_val in script_prices:
-                raw = str_val or num_val
+                raw = (str_val or num_val).strip()
                 if raw:
-                    val = cls.extract_price_from_text(raw)
-                    if not val and num_val:
-                        try:
-                            f_val = float(num_val)
-                            if 20 <= f_val <= 15000000:
-                                val = f_val
-                        except ValueError:
-                            pass
-                    if val and 20 <= val <= 15000000:
-                        result["price_bdt"] = val
-                        break
+                    cleaned = re.sub(r"[৳TkBDTটাকা,\s]", "", raw, flags=re.IGNORECASE).rstrip(".")
+                    try:
+                        f_val = float(cleaned)
+                        if 20 <= f_val <= 15000000:
+                            result["price_bdt"] = f_val
+                            break
+                    except ValueError:
+                        pass
+
+        if not result["regular_price_bdt"]:
+            reg_prices = re.findall(
+                r'\\?"(?:regular_price|old_price|original_price|base_price|pdt_price|mrp)\\?":\s*'
+                r'(?:\\?"([^\\",}]+)\\?"|([0-9.,]+))',
+                html_content,
+                re.IGNORECASE
+            )
+            for str_val, num_val in reg_prices:
+                raw = (str_val or num_val).strip()
+                if raw:
+                    cleaned = re.sub(r"[৳TkBDTটাকা,\s]", "", raw, flags=re.IGNORECASE).rstrip(".")
+                    try:
+                        f_val = float(cleaned)
+                        if result["price_bdt"] and f_val > result["price_bdt"] and f_val <= 15000000:
+                            result["regular_price_bdt"] = f_val
+                            break
+                    except ValueError:
+                        pass
 
         # ----------------------------------------------------
         # TIER 4: HTML DOM Heuristics for Price, Stock, Specs

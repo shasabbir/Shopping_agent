@@ -2,9 +2,11 @@ import os
 import re
 import sys
 import time
+import math
 import asyncio
 import logging
 import threading
+from collections import deque
 from typing import Dict, List, Optional, Any, Callable, Tuple
 from urllib.parse import urlparse, urljoin
 import xml.etree.ElementTree as ET
@@ -41,34 +43,49 @@ logger = logging.getLogger("ContinuousStealthCrawler")
 
 class ContinuousStealthCrawler:
     """
-    Production-grade continuous crawler daemon.
+    High-Performance Multi-Host Concurrent Stealth Crawler Daemon.
     Features:
-    1. Interleaved Multi-Store Round-Robin (host spreading).
-    2. Persistent Resumable Frontier Queue.
-    3. Log-Normal Jitter & Burst-and-Read Cadence.
-    4. Per-Store Circuit Breakers with Exponential Backoff.
-    5. Adaptive TLS Impersonation & Playwright Stealth Escalation.
+    1. Concurrent Multi-Host Workers (ThreadPoolExecutor / Worker threads) with non-blocking per-host scheduling.
+    2. Zero Cross-Host Head-of-Line Blocking: Independent host dwell times.
+    3. Per-Store AntiBot Cadence & Circuit Breakers (429/403 backoff).
+    4. Fair Interleaved Host Round-Robin (no single domain is starved or hammered).
+    5. Real-Time Telemetry: Rolling 60s requests/min and products/min throughput.
+    6. Adaptive TLS Impersonation & Playwright Stealth Escalation.
     """
 
-    def __init__(self, speed_profile: str = "normal"):
+    def __init__(self, speed_profile: str = "normal", concurrency: int = 6):
         self.speed_profile = speed_profile
+        self.concurrency = max(1, min(concurrency, 16))
         self.cadence = AntiBotCadence()
         self.circuit_breaker = StoreCircuitBreaker()
         self.stop_requested = threading.Event()
         self.is_running = False
-        self.current_task_info: Dict[str, Any] = {
-            "current_store": None,
-            "current_url": None,
-            "status": "idle",
-            "last_active_at": None,
-        }
-        self.stats = {
+
+        self._in_flight_stores: set = set()
+        self._stores_lock = threading.Lock()
+        self._store_cursor: int = 0
+
+        self.worker_slots: Dict[int, Dict[str, Any]] = {}
+        self._slots_lock = threading.Lock()
+
+        self.stats: Dict[str, Any] = {
             "total_requests": 0,
             "products_indexed": 0,
             "urls_discovered": 0,
             "errors": 0,
             "rate_limits_hit": 0,
             "started_at": None,
+        }
+        self._stats_lock = threading.Lock()
+
+        self._recent_requests: deque = deque(maxlen=3000)
+        self._recent_products: deque = deque(maxlen=3000)
+
+        self.current_task_info: Dict[str, Any] = {
+            "current_store": None,
+            "current_url": None,
+            "status": "idle",
+            "last_active_at": None,
         }
         self.recent_logs: List[str] = []
         self._log_lock = threading.Lock()
@@ -82,18 +99,47 @@ class ContinuousStealthCrawler:
                 self.recent_logs.pop(0)
         logger.info(message)
 
+    def get_throughput(self) -> Dict[str, float]:
+        now = time.time()
+        cutoff = now - 60.0
+        with self._stats_lock:
+            while self._recent_requests and self._recent_requests[0] < cutoff:
+                self._recent_requests.popleft()
+            while self._recent_products and self._recent_products[0] < cutoff:
+                self._recent_products.popleft()
+            req_per_min = float(len(self._recent_requests))
+            prod_per_min = float(len(self._recent_products))
+        return {
+            "req_per_min": req_per_min,
+            "prod_per_min": prod_per_min,
+        }
+
     def get_status(self) -> Dict[str, Any]:
         frontier_metrics = get_frontier_metrics()
         active_stores = get_active_stores()
         cooldown_stores = [
             s["name"] for s in active_stores if not self.circuit_breaker.is_eligible(s["id"])
         ]
+        throughput = self.get_throughput()
+        with self._slots_lock:
+            worker_slots_copy = dict(self.worker_slots)
+        with self._stats_lock:
+            stats_copy = dict(self.stats)
+
+        active_worker_count = sum(
+            1 for w in worker_slots_copy.values() if w.get("status") == "crawling"
+        )
+
         return {
             "is_running": self.is_running,
             "speed_profile": self.speed_profile,
+            "concurrency": self.concurrency,
+            "active_worker_count": active_worker_count,
             "current_store": self.current_task_info.get("current_store"),
             "current_url": self.current_task_info.get("current_url"),
-            "stats": dict(self.stats),
+            "stats": stats_copy,
+            "throughput": throughput,
+            "worker_slots": worker_slots_copy,
             "frontier": frontier_metrics,
             "cooldown_stores": cooldown_stores,
             "recent_logs": list(self.recent_logs),
@@ -104,185 +150,274 @@ class ContinuousStealthCrawler:
         self.log("Stop requested. Waiting for in-flight requests to conclude...")
         self.stop_requested.set()
 
+    def _claim_next_eligible_store(self, active_stores: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        Fair round-robin claim of an active store that:
+        1. Is not currently claimed by another in-flight worker thread.
+        2. Is eligible under StoreCircuitBreaker (no 429/403 backoff).
+        3. Is eligible under AntiBotCadence (human dwell time has elapsed).
+        """
+        if not active_stores:
+            return None
+
+        with self._stores_lock:
+            num_stores = len(active_stores)
+            start_idx = self._store_cursor % num_stores
+
+            for offset in range(num_stores):
+                idx = (start_idx + offset) % num_stores
+                store = active_stores[idx]
+                store_id = store["id"]
+
+                if store_id in self._in_flight_stores:
+                    continue
+
+                if not self.circuit_breaker.is_eligible(store_id):
+                    continue
+
+                if not self.cadence.is_store_cadence_eligible(store_id):
+                    continue
+
+                # Claim this store
+                self._in_flight_stores.add(store_id)
+                self._store_cursor = (idx + 1) % num_stores
+                return store
+
+        return None
+
+    def _crawl_single_store_url(self, store: Dict[str, Any], session: Any, worker_id: int):
+        """Fetch and process 1 item from this store's frontier."""
+        store_id = store["id"]
+        store_name = store["name"]
+
+        frontier_item = pop_next_frontier_item(store_id)
+        if not frontier_item:
+            seed_url = store.get("sitemap_url") or store.get("base_url")
+            if seed_url:
+                url_type = "sitemap" if (store.get("sitemap_url") and ".xml" in store.get("sitemap_url")) else "category"
+                ingest_frontier_urls(store_id, [seed_url], url_type=url_type, priority=20, depth=0)
+                frontier_item = pop_next_frontier_item(store_id)
+
+        if not frontier_item:
+            return
+
+        target_url = frontier_item["url"]
+        frontier_id = frontier_item["id"]
+        url_type = frontier_item.get("url_type", "product")
+        requires_browser = frontier_item.get("requires_browser", False) or (self.circuit_breaker.get_recommended_mode(store_id) == "browser")
+
+        # Immediate pre-filter: Skip assets, media, and utility links
+        url_prio = get_url_product_priority(target_url)
+        if url_prio == 99:
+            update_frontier_item_result(frontier_id, "dead")
+            return
+
+        now_str = time.strftime("%H:%M:%S")
+        with self._slots_lock:
+            self.worker_slots[worker_id] = {
+                "worker_id": worker_id,
+                "store": store_name,
+                "url": target_url,
+                "status": "crawling",
+                "updated_at": now_str,
+            }
+        self.current_task_info = {
+            "current_store": store_name,
+            "current_url": target_url,
+            "status": "crawling",
+            "last_active_at": now_str,
+        }
+
+        now_ts = time.time()
+        with self._stats_lock:
+            self.stats["total_requests"] += 1
+            self._recent_requests.append(now_ts)
+
+        persona = PersonaManager.get_persona_for_store(store_id)
+        headers = persona.get_headers(target_url)
+
+        try:
+            if requires_browser:
+                status_code, html_content = self._fetch_via_browser(target_url, store_name)
+            else:
+                status_code, html_content, _ = fetch_response_content(
+                    session, target_url, headers, timeout=12.0
+                )
+
+            # Check for Bot Challenge or WAF Block
+            if status_code == 429:
+                with self._stats_lock:
+                    self.stats["rate_limits_hit"] += 1
+                self.circuit_breaker.record_failure(store_id, 429)
+                update_frontier_item_result(frontier_id, "failed", http_status=429, backoff_seconds=300)
+                self.log(f"⚠️ {store_name} returned 429 (Rate Limited). Enforcing backoff cooldown.")
+                return
+
+            if status_code == 403 or (html_content and ("Just a moment..." in html_content or "Attention Required!" in html_content)):
+                self.log(f"🛡️ {store_name} triggered Cloudflare Challenge. Escalating store to browser mode.")
+                self.circuit_breaker.record_failure(store_id, 403, "Cloudflare Challenge")
+                update_frontier_item_result(frontier_id, "failed", http_status=403, backoff_seconds=60)
+                return
+
+            if not html_content or status_code not in [200, 201, 204]:
+                update_frontier_item_result(frontier_id, "failed", http_status=status_code or 500)
+                with self._stats_lock:
+                    self.stats["errors"] += 1
+                return
+
+            # Success - Process by URL Type
+            self.circuit_breaker.record_success(store_id)
+
+            if url_type == "sitemap" or target_url.endswith(".xml") or ".xml" in target_url:
+                self._process_sitemap_content(store_id, target_url, html_content)
+                update_frontier_item_result(frontier_id, "completed", http_status=status_code)
+                self.log(f"📑 {store_name} parsed sitemap: {target_url[:60]}")
+
+            else:
+                extracted = None
+                if url_prio <= 3 or url_type != "category":
+                    extracted = UniversalProductExtractor.extract_from_html(html_content, target_url)
+
+                if extracted and extracted.get("name") and extracted.get("price_bdt"):
+                    upsert_crawled_offer(
+                        store_id=store_id,
+                        store_product_title=extracted["name"],
+                        product_url=target_url,
+                        price_bdt=extracted["price_bdt"],
+                        category=extracted.get("category", "general"),
+                        brand=extracted.get("brand"),
+                        regular_price_bdt=extracted.get("regular_price_bdt"),
+                        in_stock=extracted.get("in_stock", True),
+                        warranty=extracted.get("warranty"),
+                        specs=extracted.get("specs"),
+                        image_url=extracted.get("image_url"),
+                        model_number=extracted.get("model_number"),
+                    )
+                    with self._stats_lock:
+                        self.stats["products_indexed"] += 1
+                        self._recent_products.append(time.time())
+                    update_store_crawl_status(store_id, "crawling", total_found_delta=1)
+                    update_frontier_item_result(frontier_id, "completed", http_status=status_code)
+                    self.log(f"✅ {store_name} indexed: {extracted['name'][:40]} (BDT {extracted['price_bdt']:,.0f})")
+
+                elif extracted and extracted.get("name") and not extracted.get("price_bdt"):
+                    update_frontier_item_result(frontier_id, "completed", http_status=status_code)
+                    self.log(f"ℹ️ {store_name} skipped: {extracted['name'][:40]} (No price / Out of stock)")
+
+                else:
+                    discovered = self._extract_links_from_category(store, target_url, html_content)
+                    if discovered:
+                        new_count = ingest_frontier_urls(store_id, discovered, url_type="product", priority=0)
+                        with self._stats_lock:
+                            self.stats["urls_discovered"] += new_count
+                        if new_count > 0:
+                            self.log(f"📂 {store_name} category parsed: discovered {new_count} new product links.")
+                    update_frontier_item_result(frontier_id, "completed", http_status=status_code)
+
+        except Exception as e:
+            with self._stats_lock:
+                self.stats["errors"] += 1
+            update_frontier_item_result(frontier_id, "failed", error=str(e), backoff_seconds=120)
+            self.log(f"❌ Error crawling {store_name} ({target_url[:50]}): {e}")
+
+    def _worker_loop(self, worker_id: int, max_items: Optional[int] = None):
+        """Worker thread loop handling non-blocking requests to assigned stores."""
+        session, _ = create_http_session(timeout=12.0)
+        items_processed = 0
+
+        try:
+            while not self.stop_requested.is_set():
+                if max_items is not None and items_processed >= max_items:
+                    break
+
+                active_stores = get_active_stores()
+                if not active_stores:
+                    time.sleep(1.0)
+                    continue
+
+                store = self._claim_next_eligible_store(active_stores)
+                if not store:
+                    time.sleep(0.15)
+                    continue
+
+                store_id = store["id"]
+                try:
+                    self._crawl_single_store_url(store, session, worker_id)
+                    items_processed += 1
+                finally:
+                    # Enforce per-host cadence dwell time for this store
+                    self.cadence.record_store_request(store_id, speed_profile=self.speed_profile)
+                    with self._stores_lock:
+                        self._in_flight_stores.discard(store_id)
+                    with self._slots_lock:
+                        self.worker_slots[worker_id] = {
+                            "worker_id": worker_id,
+                            "store": "Idle / Waiting",
+                            "url": None,
+                            "status": "idle",
+                            "updated_at": time.strftime("%H:%M:%S"),
+                        }
+        finally:
+            if hasattr(session, "close"):
+                try:
+                    session.close()
+                except Exception:
+                    pass
+
     def run_continuous_loop(
         self,
         max_iterations: Optional[int] = None,
         progress_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
     ):
         """
-        Main continuous round-robin crawl loop.
-        Rotates across stores so no host is ever requested consecutively.
+        Main multi-host concurrent crawl loop.
+        Spawns concurrent worker threads across distinct hosts with per-host cadence.
         """
         self.is_running = True
         self.stop_requested.clear()
         self.stats["started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        self.log(f"Starting Continuous Stealth Crawler daemon (Profile: {self.speed_profile.upper()})...")
+        self.log(f"Starting Continuous Stealth Crawler daemon (Profile: {self.speed_profile.upper()} | Concurrency: {self.concurrency} hosts)...")
 
         # Ensure seed URLs exist in frontier
         seed_frontier_from_stores()
 
-        iteration = 0
-        session, session_type = create_http_session(timeout=12.0)
+        max_items_per_worker = None
+        if max_iterations is not None:
+            active_stores = get_active_stores()
+            num_stores = len(active_stores) if active_stores else 1
+            max_items_per_worker = max(1, math.ceil((max_iterations * num_stores) / self.concurrency))
 
+        threads = []
         try:
+            for w_id in range(self.concurrency):
+                t = threading.Thread(
+                    target=self._worker_loop,
+                    args=(w_id, max_items_per_worker),
+                    name=f"HostWorker-{w_id}",
+                    daemon=True
+                )
+                threads.append(t)
+                t.start()
+
+            # Supervisor loop
             while not self.stop_requested.is_set():
-                active_stores = get_active_stores()
-                if not active_stores:
-                    self.log("No active stores configured in database. Sleeping 10s...")
-                    time.sleep(10)
-                    continue
-
-                processed_any_store = False
-
-                for store in active_stores:
-                    if self.stop_requested.is_set():
-                        break
-
-                    store_id = store["id"]
-                    store_name = store["name"]
-
-                    # 1. Check Circuit Breaker for this host
-                    if not self.circuit_breaker.is_eligible(store_id):
-                        rem_sec = self.circuit_breaker.get_remaining_cooldown(store_id)
-                        # Silent pass or debug log
-                        continue
-
-                    # 2. Pop next eligible URL from frontier for this store
-                    frontier_item = pop_next_frontier_item(store_id)
-                    if not frontier_item:
-                        # If frontier is empty for this store, seed from sitemap or base URL
-                        seed_url = store.get("sitemap_url") or store.get("base_url")
-                        if seed_url:
-                            url_type = "sitemap" if (store.get("sitemap_url") and ".xml" in store.get("sitemap_url")) else "category"
-                            ingest_frontier_urls(store_id, [seed_url], url_type=url_type, priority=20, depth=0)
-                            frontier_item = pop_next_frontier_item(store_id)
-
-                    if not frontier_item:
-                        # Nothing pending for this store right now
-                        continue
-
-                    processed_any_store = True
-                    target_url = frontier_item["url"]
-                    frontier_id = frontier_item["id"]
-                    url_type = frontier_item.get("url_type", "product")
-                    requires_browser = frontier_item.get("requires_browser", False) or (self.circuit_breaker.get_recommended_mode(store_id) == "browser")
-
-                    self.current_task_info = {
-                        "current_store": store_name,
-                        "current_url": target_url,
-                        "status": "crawling",
-                        "last_active_at": time.strftime("%H:%M:%S"),
-                    }
-                    self.stats["total_requests"] += 1
-
-                    # 3. Apply Persona and Request Cadence
-                    persona = PersonaManager.get_persona_for_store(store_id)
-                    headers = persona.get_headers(target_url)
-
-                    # 4. Fetch Page Content
-                    try:
-                        if requires_browser:
-                            status_code, html_content = self._fetch_via_browser(target_url, store_name)
-                        else:
-                            status_code, html_content, _ = fetch_response_content(
-                                session, target_url, headers, timeout=12.0
-                            )
-
-                        # Check for Bot Challenge or WAF Block
-                        if status_code == 429:
-                            self.stats["rate_limits_hit"] += 1
-                            self.circuit_breaker.record_failure(store_id, 429)
-                            update_frontier_item_result(frontier_id, "failed", http_status=429, backoff_seconds=300)
-                            self.log(f"⚠️ {store_name} returned 429 (Rate Limited). Enforcing backoff cooldown.")
-                            continue
-
-                        if status_code == 403 or (html_content and ("Just a moment..." in html_content or "Attention Required!" in html_content)):
-                            self.log(f"🛡️ {store_name} triggered Cloudflare Challenge. Escalating store to browser mode.")
-                            self.circuit_breaker.record_failure(store_id, 403, "Cloudflare Challenge")
-                            update_frontier_item_result(frontier_id, "failed", http_status=403, backoff_seconds=60)
-                            continue
-
-                        if not html_content or status_code not in [200, 201, 204]:
-                            update_frontier_item_result(frontier_id, "failed", http_status=status_code or 500)
-                            self.stats["errors"] += 1
-                            continue
-
-                        # 5. Success - Process by URL Type
-                        self.circuit_breaker.record_success(store_id)
-
-                        if url_type == "sitemap" or target_url.endswith(".xml") or ".xml" in target_url:
-                            self._process_sitemap_content(store_id, target_url, html_content)
-                            update_frontier_item_result(frontier_id, "completed", http_status=status_code)
-                            self.log(f"📑 {store_name} parsed sitemap: {target_url[:60]}")
-
-                        elif url_type == "category":
-                            # Extract discovered candidate links from category page
-                            discovered = self._extract_links_from_category(store, target_url, html_content)
-                            new_count = ingest_frontier_urls(store_id, discovered, url_type="product", priority=0)
-                            update_frontier_item_result(frontier_id, "completed", http_status=status_code)
-                            self.stats["urls_discovered"] += new_count
-                            self.log(f"📂 {store_name} category parsed: discovered {new_count} new product links.")
-
-                        else:
-                            # Product Page Extraction
-                            extracted = UniversalProductExtractor.extract_from_html(html_content, target_url)
-                            if extracted.get("name") and extracted.get("price_bdt"):
-                                upsert_crawled_offer(
-                                    store_id=store_id,
-                                    store_product_title=extracted["name"],
-                                    product_url=target_url,
-                                    price_bdt=extracted["price_bdt"],
-                                    category=extracted.get("category", "general"),
-                                    brand=extracted.get("brand"),
-                                    regular_price_bdt=extracted.get("regular_price_bdt"),
-                                    in_stock=extracted.get("in_stock", True),
-                                    warranty=extracted.get("warranty"),
-                                    specs=extracted.get("specs"),
-                                    image_url=extracted.get("image_url"),
-                                    model_number=extracted.get("model_number"),
-                                )
-                                self.stats["products_indexed"] += 1
-                                update_store_crawl_status(store_id, "crawling", total_found_delta=1)
-                                update_frontier_item_result(frontier_id, "completed", http_status=status_code)
-                                self.log(f"✅ {store_name} indexed: {extracted['name'][:40]} (BDT {extracted['price_bdt']:,.0f})")
-                            else:
-                                # Fallback: check if this was a listing or category-like page with links
-                                discovered = self._extract_links_from_category(store, target_url, html_content)
-                                if discovered:
-                                    new_count = ingest_frontier_urls(store_id, discovered, url_type="product", priority=0)
-                                    self.stats["urls_discovered"] += new_count
-                                    self.log(f"📂 {store_name} listing parsed: discovered {new_count} new links.")
-                                update_frontier_item_result(frontier_id, "completed", http_status=status_code)
-
-                    except Exception as e:
-                        self.stats["errors"] += 1
-                        update_frontier_item_result(frontier_id, "failed", error=str(e), backoff_seconds=120)
-                        self.log(f"❌ Error crawling {store_name} ({target_url[:50]}): {e}")
-
-                    # 6. Apply Log-Normal Delay Before Next Host Request
-                    delay = self.cadence.calculate_delay(store_id=store_id, speed_profile=self.speed_profile)
-                    time.sleep(delay)
-
-                iteration += 1
-                if max_iterations and iteration >= max_iterations:
-                    self.log(f"Reached max iterations limit ({max_iterations}). Exiting loop.")
+                alive = [t for t in threads if t.is_alive()]
+                if not alive:
                     break
+                time.sleep(0.5)
 
-                # If no store had pending eligible items, rest briefly
-                if not processed_any_store:
-                    self.current_task_info = {
-                        "current_store": "Idle / Waiting",
-                        "current_url": "All queued URLs currently processed or in cooldown. Standing by...",
-                        "status": "idle",
-                        "last_active_at": time.strftime("%H:%M:%S")
-                    }
-                    time.sleep(3.0)
+            # Await wind-down if stopped
+            for t in threads:
+                t.join(timeout=3.0)
 
         finally:
             self.is_running = False
-            self.current_task_info = {"current_store": "Idle / Stopped", "current_url": "Daemon idle.", "status": "idle"}
-            if hasattr(session, "close"):
-                session.close()
+            self.current_task_info = {
+                "current_store": "Idle / Stopped",
+                "current_url": "Daemon idle.",
+                "status": "idle",
+                "last_active_at": time.strftime("%H:%M:%S"),
+            }
             self.log("Continuous Stealth Crawler daemon stopped.")
 
     def _fetch_via_browser(self, target_url: str, store_name: str) -> Tuple[int, str]:
@@ -320,22 +455,26 @@ class ContinuousStealthCrawler:
             clean_xml = re.sub(r'\s*xmlns(:[a-zA-Z0-9_]+)?=[\x27\x22][^\x27\x22]*[\x27\x22]', '', text)
             root = ET.fromstring(clean_xml)
 
-            # Sub-sitemaps
+            # Sub-sitemaps (prioritize dedicated product sitemaps)
             sub_sitemaps = [loc.text.strip() for loc in root.findall(".//sitemap/loc") if loc.text]
             if sub_sitemaps:
-                ingest_frontier_urls(store_id, sub_sitemaps, url_type="sitemap", priority=5, depth=1)
+                prod_sitemaps = [sm for sm in sub_sitemaps if "product" in sm.lower()]
+                other_sitemaps = [sm for sm in sub_sitemaps if "product" not in sm.lower()]
+                if prod_sitemaps:
+                    ingest_frontier_urls(store_id, prod_sitemaps, url_type="sitemap", priority=1, depth=1)
+                if other_sitemaps:
+                    ingest_frontier_urls(store_id, other_sitemaps, url_type="sitemap", priority=25, depth=1)
 
-            # Product URLs
+            # Product and Category URLs
             prod_urls = [loc.text.strip() for loc in root.findall(".//url/loc") if loc.text]
             if prod_urls:
-                # Filter through product heuristics
                 candidate_products = []
                 candidate_categories = []
                 for u in prod_urls:
                     prio = get_url_product_priority(u)
                     if prio <= 3:
                         candidate_products.append(u)
-                    elif not IGNORED_REGEX.search(u):
+                    elif prio == 10:
                         candidate_categories.append(u)
 
                 if candidate_products:
@@ -347,8 +486,20 @@ class ContinuousStealthCrawler:
             # Fallback regex extraction
             locs = re.findall(r'<loc>([^<]+)</loc>', text)
             if locs:
-                clean_locs = [u.strip() for u in locs if not IGNORED_REGEX.search(u)]
-                ingest_frontier_urls(store_id, clean_locs, url_type="product", priority=5)
+                candidate_products = []
+                candidate_categories = []
+                for u in locs:
+                    clean_u = u.strip()
+                    prio = get_url_product_priority(clean_u)
+                    if prio <= 3:
+                        candidate_products.append(clean_u)
+                    elif prio == 10:
+                        candidate_categories.append(clean_u)
+
+                if candidate_products:
+                    ingest_frontier_urls(store_id, candidate_products, url_type="product", priority=0)
+                if candidate_categories:
+                    ingest_frontier_urls(store_id, candidate_categories, url_type="category", priority=10)
 
     def _extract_links_from_category(self, store: Dict[str, Any], page_url: str, html: str) -> List[str]:
         """Extract internal product links from category or listing pages."""
@@ -366,7 +517,7 @@ class ContinuousStealthCrawler:
                 continue
             if full_url.rstrip("/") == page_url.split("#")[0].rstrip("/"):
                 continue
-            if get_url_product_priority(full_url) <= 2:
+            if get_url_product_priority(full_url) <= 3:
                 candidates.append(full_url)
 
         return list(dict.fromkeys(candidates))
@@ -385,18 +536,19 @@ _daemon_instance: Optional[ContinuousStealthCrawler] = None
 _daemon_thread: Optional[threading.Thread] = None
 
 
-def get_crawler_daemon(speed_profile: str = "normal") -> ContinuousStealthCrawler:
+def get_crawler_daemon(speed_profile: str = "normal", concurrency: int = 6) -> ContinuousStealthCrawler:
     global _daemon_instance
     if _daemon_instance is None:
-        _daemon_instance = ContinuousStealthCrawler(speed_profile=speed_profile)
+        _daemon_instance = ContinuousStealthCrawler(speed_profile=speed_profile, concurrency=concurrency)
     return _daemon_instance
 
 
-def start_crawler_daemon(speed_profile: str = "normal") -> ContinuousStealthCrawler:
+def start_crawler_daemon(speed_profile: str = "normal", concurrency: int = 6) -> ContinuousStealthCrawler:
     """Start the continuous crawler in a persistent background daemon thread."""
     global _daemon_instance, _daemon_thread
-    daemon = get_crawler_daemon(speed_profile=speed_profile)
+    daemon = get_crawler_daemon(speed_profile=speed_profile, concurrency=concurrency)
     daemon.speed_profile = speed_profile
+    daemon.concurrency = max(1, min(concurrency, 16))
 
     if _daemon_thread is not None and _daemon_thread.is_alive():
         return daemon
