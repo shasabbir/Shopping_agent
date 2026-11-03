@@ -3,6 +3,7 @@ import re
 import sys
 import time
 import math
+import random
 import asyncio
 import logging
 import threading
@@ -62,6 +63,9 @@ class ContinuousStealthCrawler:
         self.is_running = False
 
         self._in_flight_stores: set = set()
+        self._in_flight_counts: Dict[int, int] = {}
+        self._empty_frontiers: set = set()
+        self._large_stores: set = {1, 2, 3, 5, 6, 8, 12, 20, 22, 23, 24}
         self._stores_lock = threading.Lock()
         self._store_cursor: int = 0
 
@@ -126,8 +130,19 @@ class ContinuousStealthCrawler:
         with self._stats_lock:
             stats_copy = dict(self.stats)
 
+        # Dynamically refresh large stores and empty frontiers
+        store_stats = frontier_metrics.get("store_stats", [])
+        if store_stats:
+            with self._stores_lock:
+                self._large_stores = {
+                    s["store_id"] for s in store_stats if s.get("pending", 0) >= 500
+                }
+                self._empty_frontiers = {
+                    s["store_id"] for s in store_stats if s.get("pending", 0) == 0
+                }
+
         active_worker_count = sum(
-            1 for w in worker_slots_copy.values() if w.get("status") == "crawling"
+            1 for w in worker_slots_copy.values() if w.get("status") in ["crawling", "active"]
         )
 
         return {
@@ -152,10 +167,11 @@ class ContinuousStealthCrawler:
 
     def _claim_next_eligible_store(self, active_stores: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """
-        Fair round-robin claim of an active store that:
-        1. Is not currently claimed by another in-flight worker thread.
-        2. Is eligible under StoreCircuitBreaker (no 429/403 backoff).
-        3. Is eligible under AntiBotCadence (human dwell time has elapsed).
+        Fair round-robin claim of an active store with pending work:
+        1. Skips stores currently known to have empty frontiers.
+        2. Large stores (>= 500 URLs) accommodate up to 2 concurrent workers.
+        3. Is eligible under StoreCircuitBreaker (no 429/403 backoff).
+        4. Is eligible under AntiBotCadence (human dwell time has elapsed).
         """
         if not active_stores:
             return None
@@ -169,24 +185,43 @@ class ContinuousStealthCrawler:
                 store = active_stores[idx]
                 store_id = store["id"]
 
-                if store_id in self._in_flight_stores:
+                # 1. Skip stores known to have empty queues
+                if store_id in self._empty_frontiers:
                     continue
 
+                # 2. Check in-flight worker capacity (2 for large stores, 1 for others)
+                cur_in_flight = self._in_flight_counts.get(store_id, 0)
+                max_capacity = 2 if store_id in self._large_stores else 1
+                if cur_in_flight >= max_capacity:
+                    continue
+
+                # 3. Check Circuit Breaker
                 if not self.circuit_breaker.is_eligible(store_id):
                     continue
 
+                # 4. Check Cadence Cooldown
                 if not self.cadence.is_store_cadence_eligible(store_id):
                     continue
 
-                # Claim this store
+                # Claim 1 worker slot for this store
+                self._in_flight_counts[store_id] = cur_in_flight + 1
                 self._in_flight_stores.add(store_id)
                 self._store_cursor = (idx + 1) % num_stores
                 return store
 
         return None
 
-    def _crawl_single_store_url(self, store: Dict[str, Any], session: Any, worker_id: int):
-        """Fetch and process 1 item from this store's frontier."""
+    def _release_store_claim(self, store_id: int):
+        with self._stores_lock:
+            cur = self._in_flight_counts.get(store_id, 1)
+            if cur <= 1:
+                self._in_flight_counts.pop(store_id, None)
+                self._in_flight_stores.discard(store_id)
+            else:
+                self._in_flight_counts[store_id] = cur - 1
+
+    def _crawl_single_store_url(self, store: Dict[str, Any], session: Any, worker_id: int) -> bool:
+        """Fetch and process 1 item from this store's frontier. Returns True if item crawled, False if queue empty."""
         store_id = store["id"]
         store_name = store["name"]
 
@@ -199,7 +234,7 @@ class ContinuousStealthCrawler:
                 frontier_item = pop_next_frontier_item(store_id)
 
         if not frontier_item:
-            return
+            return False
 
         target_url = frontier_item["url"]
         frontier_id = frontier_item["id"]
@@ -210,7 +245,7 @@ class ContinuousStealthCrawler:
         url_prio = get_url_product_priority(target_url)
         if url_prio == 99:
             update_frontier_item_result(frontier_id, "dead")
-            return
+            return True
 
         now_str = time.strftime("%H:%M:%S")
         with self._slots_lock:
@@ -251,19 +286,19 @@ class ContinuousStealthCrawler:
                 self.circuit_breaker.record_failure(store_id, 429)
                 update_frontier_item_result(frontier_id, "failed", http_status=429, backoff_seconds=300)
                 self.log(f"⚠️ {store_name} returned 429 (Rate Limited). Enforcing backoff cooldown.")
-                return
+                return True
 
             if status_code == 403 or (html_content and ("Just a moment..." in html_content or "Attention Required!" in html_content)):
                 self.log(f"🛡️ {store_name} triggered Cloudflare Challenge. Escalating store to browser mode.")
                 self.circuit_breaker.record_failure(store_id, 403, "Cloudflare Challenge")
                 update_frontier_item_result(frontier_id, "failed", http_status=403, backoff_seconds=60)
-                return
+                return True
 
             if not html_content or status_code not in [200, 201, 204]:
                 update_frontier_item_result(frontier_id, "failed", http_status=status_code or 500)
                 with self._stats_lock:
                     self.stats["errors"] += 1
-                return
+                return True
 
             # Success - Process by URL Type
             self.circuit_breaker.record_success(store_id)
@@ -312,6 +347,8 @@ class ContinuousStealthCrawler:
                             self.stats["urls_discovered"] += new_count
                         if new_count > 0:
                             self.log(f"📂 {store_name} category parsed: discovered {new_count} new product links.")
+                            with self._stores_lock:
+                                self._empty_frontiers.discard(store_id)
                     update_frontier_item_result(frontier_id, "completed", http_status=status_code)
 
         except Exception as e:
@@ -319,6 +356,8 @@ class ContinuousStealthCrawler:
                 self.stats["errors"] += 1
             update_frontier_item_result(frontier_id, "failed", error=str(e), backoff_seconds=120)
             self.log(f"❌ Error crawling {store_name} ({target_url[:50]}): {e}")
+
+        return True
 
     def _worker_loop(self, worker_id: int, max_items: Optional[int] = None):
         """Worker thread loop handling non-blocking requests to assigned stores."""
@@ -332,29 +371,61 @@ class ContinuousStealthCrawler:
 
                 active_stores = get_active_stores()
                 if not active_stores:
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                     continue
 
                 store = self._claim_next_eligible_store(active_stores)
                 if not store:
+                    with self._slots_lock:
+                        if worker_id in self.worker_slots and self.worker_slots[worker_id].get("status") != "idle":
+                            self.worker_slots[worker_id] = {
+                                "worker_id": worker_id,
+                                "store": "Interleaving hosts...",
+                                "url": "Standing by for next host cooldown...",
+                                "status": "idle",
+                                "updated_at": time.strftime("%H:%M:%S"),
+                            }
                     time.sleep(0.15)
                     continue
 
                 store_id = store["id"]
+                store_name = store["name"]
+
+                # Process a continuous mini-session of 2 to 4 URLs for this store
+                # Keeps the worker 100% productive and reuses the HTTP/2 connection
+                batch_size = 1 if max_items is not None else random.randint(2, 4)
+
                 try:
-                    self._crawl_single_store_url(store, session, worker_id)
-                    items_processed += 1
+                    for b_idx in range(batch_size):
+                        if self.stop_requested.is_set():
+                            break
+                        if max_items is not None and items_processed >= max_items:
+                            break
+
+                        had_work = self._crawl_single_store_url(store, session, worker_id)
+                        if not had_work:
+                            with self._stores_lock:
+                                self._empty_frontiers.add(store_id)
+                            break
+
+                        items_processed += 1
+
+                        # Humanized micro-pause between URLs within the same store session
+                        if b_idx < batch_size - 1:
+                            delay = self.cadence.calculate_delay(store_id=store_id, speed_profile=self.speed_profile)
+                            dwell = max(0.5, min(1.6, delay * 0.4))
+                            time.sleep(dwell)
+
                 finally:
                     # Enforce per-host cadence dwell time for this store
                     self.cadence.record_store_request(store_id, speed_profile=self.speed_profile)
-                    with self._stores_lock:
-                        self._in_flight_stores.discard(store_id)
+                    self._release_store_claim(store_id)
                     with self._slots_lock:
                         self.worker_slots[worker_id] = {
                             "worker_id": worker_id,
-                            "store": "Idle / Waiting",
-                            "url": None,
-                            "status": "idle",
+                            "store": "Rotating host...",
+                            "url": "Selecting next target...",
+                            "status": "active",
                             "updated_at": time.strftime("%H:%M:%S"),
                         }
         finally:
