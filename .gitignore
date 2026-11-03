@@ -8,4 +8,4 @@ dist/
 build/
 *.egg-info/
 
-shopping_agent.db
+shopping_agent.db*
