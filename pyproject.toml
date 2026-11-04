@@ -1,0 +1,55 @@
+[project]
+name = "shopping-agent"
+version = "0.2.0"
+description = "Bangladesh AI Shopping Decision Agent & Multi-Store Price Comparison Engine"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Sabbir Ahmed", email = "shasabbir@gmail.com" }
+]
+keywords = [
+    "shopping-agent",
+    "bangladesh",
+    "langgraph",
+    "gemini",
+    "ecommerce",
+    "price-comparison",
+    "crawlee",
+    "streamlit"
+]
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "langchain-google-genai>=2.0.0",
+    "duckduckgo-search>=6.0.0",
+    "ddgs>=9.0.0",
+    "httpx>=0.27.0",
+    "beautifulsoup4>=4.12.0",
+    "pydantic>=2.7.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.7.0",
+    "streamlit>=1.35.0",
+    "pandas>=2.0.0",
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+    "curl-cffi>=0.7.0",
+    "crawlee>=1.11.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+
+
