@@ -1,3 +1,4 @@
+import threading
 import os
 import re
 import json
@@ -21,6 +22,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, scoped_session, backref
 
 Base = declarative_base()
+_db_write_lock = threading.Lock()
 
 
 def utc_now() -> datetime:
@@ -206,33 +208,128 @@ class CrawlFrontier(Base):
         }
 
 
-# 25 Default Bangladesh Stores
+# 105 Verified Bangladesh Stores across Tech, Gadgets, Appliances, Fashion, Superstores & Books
 DEFAULT_BANGLADESH_STORES = [
+    # 1. Tech, Computing, Laptops & PC Hardware (25 stores)
     {"name": "Star Tech", "base_url": "https://www.startech.com.bd", "sitemap_url": "https://www.startech.com.bd/sitemap.xml"},
     {"name": "Ryans Computers", "base_url": "https://www.ryans.com", "sitemap_url": "https://www.ryans.com/sitemap.xml"},
     {"name": "TechLand BD", "base_url": "https://www.techlandbd.com", "sitemap_url": "https://www.techlandbd.com/sitemaps/product-sitemap-1.xml"},
-    {"name": "Pickaboo", "base_url": "https://www.pickaboo.com", "sitemap_url": "https://www.pickaboo.com/product/smartphone"},
-    {"name": "Daraz Bangladesh", "base_url": "https://www.daraz.com.bd", "sitemap_url": "https://www.daraz.com.bd/sitemap.xml"},
+    {"name": "Skyland BD", "base_url": "https://www.skyland.com.bd", "sitemap_url": "https://www.skyland.com.bd/sitemap.xml"},
+    {"name": "Potaka BD", "base_url": "https://potakait.com", "sitemap_url": "https://potakait.com/sitemap.xml"},
+    {"name": "UCC BD", "base_url": "https://www.ucc.com.bd", "sitemap_url": "https://www.ucc.com.bd/sitemaps/product-sitemap.xml"},
+    {"name": "Nexus BD", "base_url": "https://www.nexus.com.bd", "sitemap_url": "https://www.nexus.com.bd/sitemap.xml"},
+    {"name": "Creatus Computer", "base_url": "https://creatuscomputer.com", "sitemap_url": "https://creatuscomputer.com/sitemap.xml"},
+    {"name": "UltraTech BD", "base_url": "https://www.ultratechbd.com", "sitemap_url": "https://www.ultratechbd.com/sitemap.xml"},
+    {"name": "PC House BD", "base_url": "https://pchouse.com.bd", "sitemap_url": "https://pchouse.com.bd/sitemap.xml"},
+    {"name": "Computer Village", "base_url": "https://www.computervillage.com.bd", "sitemap_url": "https://www.computervillage.com.bd/sitemap.xml"},
+    {"name": "Dolphin Computers", "base_url": "https://dolphin.com.bd", "sitemap_url": "https://dolphin.com.bd/sitemap.xml"},
+    {"name": "Binary Logic", "base_url": "https://binarylogic.com.bd", "sitemap_url": "https://binarylogic.com.bd/sitemap.xml"},
+    {"name": "Global Brand PLC", "base_url": "https://www.globalbrand.com.bd", "sitemap_url": "https://www.globalbrand.com.bd/sitemap.xml"},
+    {"name": "Smart Technologies", "base_url": "https://smartbd.com", "sitemap_url": "https://smartbd.com/sitemap.xml"},
+    {"name": "Four Star IT", "base_url": "https://fourstarit.com", "sitemap_url": "https://fourstarit.com/sitemap.xml"},
+    {"name": "Gamers Alley BD", "base_url": "https://gamersalleybd.com", "sitemap_url": "https://gamersalleybd.com/sitemap.xml"},
+    {"name": "Tech Deal BD", "base_url": "https://techdeal.com.bd", "sitemap_url": "https://techdeal.com.bd/sitemap.xml"},
+    {"name": "Tech Trend BD", "base_url": "https://techtrendbd.com", "sitemap_url": "https://techtrendbd.com/sitemap.xml"},
+    {"name": "QuickFix BD", "base_url": "https://quickfix.com.bd", "sitemap_url": "https://quickfix.com.bd/sitemap.xml"},
+    {"name": "Root Five BD", "base_url": "https://rootfivebd.com", "sitemap_url": "https://rootfivebd.com/sitemap.xml"},
+    {"name": "Universal Computer BD", "base_url": "https://universal.com.bd", "sitemap_url": "https://universal.com.bd/sitemap.xml"},
+    {"name": "Netstar BD", "base_url": "https://netstar.com.bd", "sitemap_url": "https://netstar.com.bd/sitemap.xml"},
+    {"name": "Onix Computer", "base_url": "https://onixbd.com", "sitemap_url": "https://onixbd.com/sitemap.xml"},
+    {"name": "IT Palace BD", "base_url": "https://itpalace.com.bd", "sitemap_url": "https://itpalace.com.bd/sitemap.xml"},
+
+    # 2. Smartphones, Apple Ecosystem & Mobile Accessories (20 stores)
     {"name": "Apple Gadgets BD", "base_url": "https://www.applegadgetsbd.com", "sitemap_url": "https://www.applegadgetsbd.com/product/sitemap.xml"},
     {"name": "Gadget & Gear", "base_url": "https://gadgetandgear.com", "sitemap_url": "https://gadgetandgear.com/sitemap.xml"},
-    {"name": "Skyland BD", "base_url": "https://www.skyland.com.bd", "sitemap_url": "https://www.skyland.com.bd/sitemap.xml"},
     {"name": "Custom Mac BD", "base_url": "https://custommacbd.com", "sitemap_url": "https://custommacbd.com/sitemap.xml"},
-    {"name": "BDStall", "base_url": "https://www.bdstall.com", "sitemap_url": "https://www.bdstall.com/monitor/"},
     {"name": "Vibe Gaming", "base_url": "https://vibegaming.com.bd", "sitemap_url": "https://vibegaming.com.bd/product-sitemap1.xml"},
+    {"name": "Pickaboo", "base_url": "https://www.pickaboo.com", "sitemap_url": "https://www.pickaboo.com/product/smartphone"},
+    {"name": "Sumash Tech", "base_url": "https://sumashtech.com", "sitemap_url": "https://sumashtech.com/sitemap.xml"},
+    {"name": "Dazzle BD", "base_url": "https://dazzle.com.bd", "sitemap_url": "https://dazzle.com.bd/sitemap.xml"},
+    {"name": "Gadget Monkey BD", "base_url": "https://gadgetmonkeybd.com", "sitemap_url": "https://gadgetmonkeybd.com/sitemap.xml"},
+    {"name": "Motion View", "base_url": "https://motionview.com.bd", "sitemap_url": "https://motionview.com.bd/sitemap.xml"},
+    {"name": "Gear Studio BD", "base_url": "https://gearstudiobd.com", "sitemap_url": "https://gearstudiobd.com/sitemap.xml"},
+    {"name": "Tech Shoppers BD", "base_url": "https://techshoppersbd.com", "sitemap_url": "https://techshoppersbd.com/sitemap.xml"},
+    {"name": "Gadget Studio BD", "base_url": "https://gadgetstudiobd.com", "sitemap_url": "https://gadgetstudiobd.com/sitemap.xml"},
+    {"name": "Gadget Planet BD", "base_url": "https://gadgetplanetbd.com", "sitemap_url": "https://gadgetplanetbd.com/sitemap.xml"},
+    {"name": "Kry International", "base_url": "https://kryinternational.com", "sitemap_url": "https://kryinternational.com/sitemap.xml"},
+    {"name": "Diamond Telecom", "base_url": "https://diamondtelecombd.com", "sitemap_url": "https://diamondtelecombd.com/sitemap.xml"},
+    {"name": "Gadget Hub BD", "base_url": "https://gadgethubbd.com", "sitemap_url": "https://gadgethubbd.com/sitemap.xml"},
+    {"name": "Smart Gadget BD", "base_url": "https://smartgadgetbd.com", "sitemap_url": "https://smartgadgetbd.com/sitemap.xml"},
+    {"name": "Trust Phone BD", "base_url": "https://trustphonebd.com", "sitemap_url": "https://trustphonebd.com/sitemap.xml"},
+    {"name": "Gadget BD", "base_url": "https://gadgetbd.com", "sitemap_url": "https://gadgetbd.com/sitemap.xml"},
+    {"name": "MobileDokan Shop", "base_url": "https://shop.mobiledokan.com", "sitemap_url": "https://shop.mobiledokan.com/sitemap.xml"},
+
+    # 3. Electronics, TV & Home Appliances (17 stores)
     {"name": "Walton Plaza", "base_url": "https://waltonbd.com", "sitemap_url": "https://waltonbd.com/sitemap.xml"},
     {"name": "Singer Bangladesh", "base_url": "https://www.singerbd.com", "sitemap_url": "https://www.singerbd.com/sitemap.xml"},
     {"name": "Transcom Digital", "base_url": "https://transcomdigital.com", "sitemap_url": "https://transcomdigital.com/sitemap.xml"},
     {"name": "Butterfly Group", "base_url": "https://butterflygroupbd.com", "sitemap_url": "https://butterflygroupbd.com/sitemap.xml"},
+    {"name": "Rangs eMart", "base_url": "https://rangsemart.com.bd", "sitemap_url": "https://rangsemart.com.bd/sitemap.xml"},
+    {"name": "Electra International", "base_url": "https://electra.com.bd", "sitemap_url": "https://electra.com.bd/sitemap.xml"},
+    {"name": "Best Electronics", "base_url": "https://bestelectronics.com.bd", "sitemap_url": "https://bestelectronics.com.bd/sitemap.xml"},
+    {"name": "Esquire Electronics", "base_url": "https://esquireelectronicsltd.com", "sitemap_url": "https://esquireelectronicsltd.com/sitemap.xml"},
+    {"name": "Vision Electronics", "base_url": "https://vision.com.bd", "sitemap_url": "https://vision.com.bd/sitemap.xml"},
+    {"name": "Minister Group", "base_url": "https://ministerbd.net", "sitemap_url": "https://ministerbd.net/sitemap.xml"},
+    {"name": "Jamuna Electronics", "base_url": "https://estorejamuna.com", "sitemap_url": "https://estorejamuna.com/sitemap.xml"},
+    {"name": "Sony Rangs", "base_url": "https://sonyrangs.com", "sitemap_url": "https://sonyrangs.com/sitemap.xml"},
+    {"name": "Haier Bangladesh", "base_url": "https://haier.com.bd", "sitemap_url": "https://haier.com.bd/sitemap.xml"},
+    {"name": "Sharp Electronics BD", "base_url": "https://sharpelectronics.com.bd", "sitemap_url": "https://sharpelectronics.com.bd/sitemap.xml"},
+    {"name": "Gree Bangladesh", "base_url": "https://greebangladesh.com", "sitemap_url": "https://greebangladesh.com/sitemap.xml"},
+    {"name": "Midea BD", "base_url": "https://mideabd.com", "sitemap_url": "https://mideabd.com/sitemap.xml"},
+    {"name": "Konka BD", "base_url": "https://konkabd.com", "sitemap_url": "https://konkabd.com/sitemap.xml"},
+
+    # 4. Multi-Category Marketplaces (9 stores)
+    {"name": "Daraz Bangladesh", "base_url": "https://www.daraz.com.bd", "sitemap_url": "https://www.daraz.com.bd/sitemap.xml"},
+    {"name": "Othoba", "base_url": "https://www.othoba.com", "sitemap_url": None},
+    {"name": "BDStall", "base_url": "https://www.bdstall.com", "sitemap_url": "https://www.bdstall.com/monitor/"},
+    {"name": "PriyoShop", "base_url": "https://priyoshop.com", "sitemap_url": "https://priyoshop.com/sitemap.xml"},
+    {"name": "Evaly", "base_url": "https://evaly.com.bd", "sitemap_url": "https://evaly.com.bd/sitemap.xml"},
+    {"name": "AjkerDeal", "base_url": "https://ajkerdeal.com", "sitemap_url": "https://ajkerdeal.com/sitemap.xml"},
+    {"name": "Bikroy Deals", "base_url": "https://bikroy.com", "sitemap_url": "https://bikroy.com/sitemap.xml"},
+    {"name": "BanglaShoppers", "base_url": "https://banglashoppers.com", "sitemap_url": "https://banglashoppers.com/sitemap.xml"},
+    {"name": "Bagdoom", "base_url": "https://bagdoom.com", "sitemap_url": "https://bagdoom.com/sitemap.xml"},
+
+    # 5. Footwear, Fashion & Lifestyle (18 stores)
     {"name": "Apex Footwear", "base_url": "https://apex4u.com", "sitemap_url": "https://apex4u.com/sitemap_products.xml"},
     {"name": "Bata Bangladesh", "base_url": "https://www.batabd.com", "sitemap_url": "https://www.batabd.com/sitemap.xml"},
     {"name": "Lotto Bangladesh", "base_url": "https://www.lottobd.com", "sitemap_url": "https://lottobd.com/sitemap.xml"},
+    {"name": "Bay Emporium", "base_url": "https://bayemporium.com", "sitemap_url": "https://bayemporium.com/sitemap.xml"},
+    {"name": "Orion Footwear", "base_url": "https://orionfootwearbd.com", "sitemap_url": "https://orionfootwearbd.com/sitemap.xml"},
     {"name": "Aarong", "base_url": "https://www.aarong.com", "sitemap_url": "https://www.aarong.com/bgd/men/panjabi"},
-    {"name": "Rokomari", "base_url": "https://www.rokomari.com", "sitemap_url": "https://www.rokomari.com/sitemap.xml"},
-    {"name": "Othoba", "base_url": "https://www.othoba.com", "sitemap_url": None},
+    {"name": "Yellow Clothing", "base_url": "https://yellowclothing.net", "sitemap_url": "https://yellowclothing.net/sitemap.xml"},
+    {"name": "Sailor BD", "base_url": "https://sailor.clothing", "sitemap_url": "https://sailor.clothing/sitemap.xml"},
+    {"name": "Cats Eye", "base_url": "https://catseye.com.bd", "sitemap_url": "https://catseye.com.bd/sitemap.xml"},
+    {"name": "Le Reve", "base_url": "https://lerevecraze.com", "sitemap_url": "https://lerevecraze.com/sitemap.xml"},
+    {"name": "Richman", "base_url": "https://richmanbd.com", "sitemap_url": "https://richmanbd.com/sitemap.xml"},
+    {"name": "Artisan Lifestyle", "base_url": "https://artisanlifestyle.net", "sitemap_url": "https://artisanlifestyle.net/sitemap.xml"},
+    {"name": "Fabrilife", "base_url": "https://fabrilife.com", "sitemap_url": "https://fabrilife.com/sitemap.xml"},
+    {"name": "Klothio", "base_url": "https://klothio.com", "sitemap_url": "https://klothio.com/sitemap.xml"},
+    {"name": "Gentle Park", "base_url": "https://gentlepark.com", "sitemap_url": "https://gentlepark.com/sitemap.xml"},
+    {"name": "SaRa Lifestyle", "base_url": "https://saralifestyle.com", "sitemap_url": "https://saralifestyle.com/sitemap.xml"},
+    {"name": "Twelve Clothing", "base_url": "https://twelvebd.com", "sitemap_url": "https://twelvebd.com/sitemap.xml"},
+    {"name": "Illiyeen", "base_url": "https://o2.com.bd", "sitemap_url": "https://o2.com.bd/sitemap.xml"},
+
+    # 6. Grocery, Superstores & Organics (7 stores)
     {"name": "Chaldal", "base_url": "https://chaldal.com", "sitemap_url": "https://chaldal.com/sitemap.xml"},
     {"name": "Shwapno", "base_url": "https://www.shwapno.com", "sitemap_url": "https://www.shwapno.com/sitemap.xml"},
-    {"name": "Potaka BD", "base_url": "https://potakait.com", "sitemap_url": "https://potakait.com/sitemap.xml"},
-    {"name": "UCC BD", "base_url": "https://www.ucc.com.bd", "sitemap_url": "https://www.ucc.com.bd/sitemaps/product-sitemap.xml"},
+    {"name": "Meena Bazar", "base_url": "https://meenabazaronline.com", "sitemap_url": "https://meenabazaronline.com/sitemap.xml"},
+    {"name": "Agora BD", "base_url": "https://agora-online.com", "sitemap_url": "https://agora-online.com/sitemap.xml"},
+    {"name": "Daily Shopping", "base_url": "https://dailyshoppingbd.com", "sitemap_url": "https://dailyshoppingbd.com/sitemap.xml"},
+    {"name": "Khaas Food", "base_url": "https://khaasfood.com", "sitemap_url": "https://khaasfood.com/sitemap.xml"},
+    {"name": "Parmeeda", "base_url": "https://parmeeda.com", "sitemap_url": "https://parmeeda.com/sitemap.xml"},
+
+    # 7. Books, Stationery & Education (4 stores)
+    {"name": "Rokomari", "base_url": "https://www.rokomari.com", "sitemap_url": "https://www.rokomari.com/sitemap.xml"},
+    {"name": "Wafilife", "base_url": "https://www.wafilife.com", "sitemap_url": "https://www.wafilife.com/sitemap.xml"},
+    {"name": "BoiBazar", "base_url": "https://boibazar.com", "sitemap_url": "https://boibazar.com/sitemap.xml"},
+    {"name": "KitabBhuban", "base_url": "https://kitabbhuban.com", "sitemap_url": "https://kitabbhuban.com/sitemap.xml"},
+
+    # 8. Beauty, Skincare & Personal Care (5 stores)
+    {"name": "Shajgoj", "base_url": "https://shajgoj.com", "sitemap_url": "https://shajgoj.com/sitemap.xml"},
+    {"name": "Beauty Booth BD", "base_url": "https://beautybooth.com.bd", "sitemap_url": "https://beautybooth.com.bd/sitemap.xml"},
+    {"name": "Aroma BD", "base_url": "https://aromabd.com", "sitemap_url": "https://aromabd.com/sitemap.xml"},
+    {"name": "Oumph BD", "base_url": "https://oumphbd.com", "sitemap_url": "https://oumphbd.com/sitemap.xml"},
+    {"name": "OsudPotro", "base_url": "https://osudpotro.com", "sitemap_url": "https://osudpotro.com/sitemap.xml"},
 ]
 
 

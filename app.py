@@ -398,10 +398,10 @@ with tab_crawler:
             concurrency_choice = st.slider(
                 "Parallel Host Workers:",
                 min_value=1,
-                max_value=12,
-                value=6,
-                step=1,
-                help="Number of distinct store websites to crawl concurrently in parallel. Anti-bot dwell time and circuit breakers are strictly enforced per store.",
+                max_value=80,
+                value=30,
+                step=2,
+                help="Number of distinct store websites to crawl concurrently in parallel. With 80-100+ stores, 30 to 50+ workers can safely crawl without any host receiving consecutive hits.",
                 disabled=daemon_running
             )
     with col_d2:
@@ -597,8 +597,24 @@ with tab_crawler:
         stores_list = get_all_stores()
         st.subheader(f"📋 Configured Store Roster ({len(stores_list)} Stores)")
 
+        col_st1, col_st2 = st.columns([3, 1])
+        with col_st1:
+            st_search = st.text_input("🔍 Filter stores by name or URL:", placeholder="e.g. Star Tech, Walton, Apex, Singer, Daraz...")
+        with col_st2:
+            st_filter_active = st.selectbox("Status Filter:", ["All Stores", "Active Only", "Inactive Only"])
+
+        filtered_stores = stores_list
+        if st_search.strip():
+            kw = st_search.strip().lower()
+            filtered_stores = [s for s in filtered_stores if kw in s["name"].lower() or kw in s["base_url"].lower()]
+
+        if st_filter_active == "Active Only":
+            filtered_stores = [s for s in filtered_stores if s["is_active"]]
+        elif st_filter_active == "Inactive Only":
+            filtered_stores = [s for s in filtered_stores if not s["is_active"]]
+
         table_data = []
-        for s in stores_list:
+        for s in filtered_stores:
             table_data.append({
                 "ID": s["id"],
                 "Store Name": s["name"],
@@ -610,7 +626,8 @@ with tab_crawler:
             })
 
         df_stores = pd.DataFrame(table_data)
-        st.dataframe(df_stores, use_container_width=True, hide_index=True)
+        st.dataframe(df_stores, use_container_width=True, hide_index=True, height=350)
+        st.caption(f"Showing {len(filtered_stores)} of {len(stores_list)} configured stores.")
 
     render_store_roster_table()
 

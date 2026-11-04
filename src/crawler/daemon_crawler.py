@@ -56,7 +56,7 @@ class ContinuousStealthCrawler:
 
     def __init__(self, speed_profile: str = "normal", concurrency: int = 6):
         self.speed_profile = speed_profile
-        self.concurrency = max(1, min(concurrency, 16))
+        self.concurrency = max(1, min(concurrency, 80))
         self.cadence = AntiBotCadence()
         self.circuit_breaker = StoreCircuitBreaker()
         self.stop_requested = threading.Event()
@@ -619,7 +619,7 @@ def start_crawler_daemon(speed_profile: str = "normal", concurrency: int = 6) ->
     global _daemon_instance, _daemon_thread
     daemon = get_crawler_daemon(speed_profile=speed_profile, concurrency=concurrency)
     daemon.speed_profile = speed_profile
-    daemon.concurrency = max(1, min(concurrency, 16))
+    daemon.concurrency = max(1, min(concurrency, 80))
 
     if _daemon_thread is not None and _daemon_thread.is_alive():
         return daemon
